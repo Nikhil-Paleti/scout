@@ -172,6 +172,10 @@ struct Worker {
     applied_total: u64,
     git_stamp: Option<(i64, u64, i64, u64)>,
     last_git_check: Instant,
+    /// HEAD as seen just before the last reconcile listed its paths; it is
+    /// recorded in the manifest only once those paths are applied, so the
+    /// stored commit never claims changes that weren't indexed.
+    pending_commit: Option<String>,
 }
 
 impl Worker {
@@ -221,6 +225,7 @@ impl Worker {
 
     /// Paths git thinks differ from the indexed commit, plus its dirty set.
     fn git_reconcile(&mut self) -> Result<()> {
+        let head_before = repo::head(&self.root);
         let m = Manifest::load(&self.dir)?;
         let mut paths = Vec::new();
         match m.commit.as_deref().and_then(|c| repo::changed_since(&self.root, c)) {
@@ -231,10 +236,15 @@ impl Worker {
             }
             None => {}
         }
-        if let Some(p) = repo::status_paths(&self.root) {
-            paths.extend(p);
+        match repo::status_paths(&self.root) {
+            Some(p) => paths.extend(p),
+            // git was busy (e.g. mid-commit holding index.lock): retry on the
+            // next poll rather than miss the change.
+            None if self.root.join(".git").exists() => bail!("git status failed"),
+            None => {}
         }
         self.enqueue(paths);
+        self.pending_commit = head_before;
         // Record the new HEAD even if no files changed.
         self.first_pending.get_or_insert_with(Instant::now);
         Ok(())
@@ -242,6 +252,7 @@ impl Worker {
 
     /// Compares a fresh walk against the index by size and mtime.
     fn full_reconcile(&mut self) -> Result<()> {
+        let head_before = repo::head(&self.root);
         self.rules.reload();
         let index = Index::open(&self.dir)?;
         let skipped = std::sync::atomic::AtomicU64::new(0);
@@ -272,6 +283,7 @@ impl Worker {
         }
         log(format!("full reconcile: {} paths to re-check", changed.len()));
         self.enqueue(changed);
+        self.pending_commit = head_before;
         self.first_pending.get_or_insert_with(Instant::now);
         Ok(())
     }
@@ -281,7 +293,7 @@ impl Worker {
         self.first_pending = None;
         let ignore_changed = paths.iter().any(|p| Rules::is_ignore_file(p));
         let t = Instant::now();
-        let commit = repo::head(&self.root);
+        let commit = self.pending_commit.take();
         let stats = {
             let _g = lock::lock(&self.dir.join(lock::WRITE_LOCK))?;
             apply_changes(&self.dir, &self.rules, &paths, filter::DEFAULT_MAX_FILE_SIZE, commit)?
@@ -420,6 +432,7 @@ pub fn serve(root: &Path, dir: &Path, opts: ServeOptions) -> Result<()> {
         applied_total: 0,
         git_stamp: repo::git_stamp(root),
         last_git_check: now,
+        pending_commit: None,
     };
     match existing {
         Some(m) if m.excludes == excludes => {
@@ -471,11 +484,14 @@ pub fn serve(root: &Path, dir: &Path, opts: ServeOptions) -> Result<()> {
         if w.last_git_check.elapsed() >= GIT_POLL {
             w.last_git_check = Instant::now();
             let stamp = repo::git_stamp(root);
-            if stamp != w.git_stamp {
-                w.git_stamp = stamp;
+            let busy = root.join(".git/index.lock").exists();
+            if stamp != w.git_stamp && !busy {
                 w.last_activity = Instant::now();
-                if let Err(e) = w.git_reconcile() {
-                    log(format!("git reconcile failed: {:#}", e));
+                // Only record the stamp once reconcile succeeded, so a change
+                // made while git was busy is picked up on the next poll.
+                match w.git_reconcile() {
+                    Ok(()) => w.git_stamp = stamp,
+                    Err(e) => log(format!("git reconcile failed, will retry: {:#}", e)),
                 }
             }
         }
