@@ -153,6 +153,9 @@ fn daemon_keeps_index_fresh() {
     let r = e.wait_for("fresh_marker_xyz", 1);
     assert_eq!(r, vec!["src/a.rs:1:12:fn one() { fresh_marker_xyz(); }"]);
     assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
+    // The delta carries symbols: the new call and the old definition.
+    assert_eq!(e.search("calls:fresh_marker_xyz"), vec!["src/a.rs:1:12:fn one() { fresh_marker_xyz(); }"]);
+    assert_eq!(e.search("sym:one"), vec!["src/a.rs:1:4:fn one() { fresh_marker_xyz(); }"]);
 
     // New untracked file, then a deletion.
     e.write("notes/todo.md", "fresh_marker_xyz too\n");
@@ -195,4 +198,58 @@ fn scoutignore_change_reindexes() {
     e.write(".scoutignore", "!gen/\n");
     e.notify(".scoutignore");
     assert_eq!(e.wait_for("generated_api_fn", 1).len(), 1);
+}
+
+#[test]
+fn symbols_and_output_formats() {
+    let e = Env::new();
+    e.write(
+        "src/widget.cc",
+        "namespace ui {\nclass Widget {\n public:\n  void Draw();\n};\nvoid Widget::Draw() {\n  Paint(1);\n}\nvoid Paint(int n) {}\n}\n",
+    );
+    e.write("app/main.py", "from ui import paint\n\ndef main():\n    Paint(2)\n    run()\n\ndef run():\n    pass\n");
+    e.write("app/BUILD", "py_binary(\n    name = \"app\",\n    srcs = [\"main.py\"],\n)\n");
+    let b = e.scout().args(["build", "--quiet"]).output().unwrap();
+    assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
+
+    let lines = |args: &[&str]| -> Vec<String> {
+        let o = e.scout().args(args).output().unwrap();
+        String::from_utf8_lossy(&o.stdout).lines().map(|s| s.to_string()).collect()
+    };
+    // Definitions: exact name first; the header-style declaration comes too.
+    let defs = lines(&["sym", "Draw", "--vimgrep"]);
+    assert_eq!(defs.len(), 2, "{defs:?}");
+    assert!(defs.iter().any(|l| l.starts_with("src/widget.cc:6:")), "{defs:?}");
+    assert_eq!(lines(&["sym:Paint kind:function", "--vimgrep"]), vec!["src/widget.cc:9:6:void Paint(int n) {}"]);
+    assert_eq!(lines(&["sym", "app", "lang:bazel", "--vimgrep"]), vec!["app/BUILD:2:13:    name = \"app\","]);
+
+    // Callers, with the enclosing function in JSON.
+    let calls = lines(&["calls", "Paint", "--json"]);
+    assert_eq!(calls.len(), 3, "{calls:?}");
+    let v: Vec<serde_json::Value> = calls.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let mut ins: Vec<(String, String)> = v[..2]
+        .iter()
+        .map(|h| (h["path"].as_str().unwrap().to_string(), h["in"].as_str().unwrap().to_string()))
+        .collect();
+    ins.sort();
+    assert_eq!(ins, vec![("app/main.py".into(), "main".into()), ("src/widget.cc".into(), "Draw".into())]);
+    assert_eq!(v[0]["kind"], "call");
+    assert_eq!(v[0]["symbol"], "Paint");
+    assert_eq!(v[2]["type"], "summary");
+    assert_eq!(v[2]["matches"], 2);
+
+    // refs: is whole word and case sensitive: `paint` on the import line is not a match.
+    let refs = lines(&["refs", "Paint", "--vimgrep"]);
+    assert_eq!(refs.len(), 3, "{refs:?}");
+
+    // Context lines and `scout QUERY` shorthand.
+    let ctx = lines(&["def run", "-C", "1", "--color", "never"]);
+    assert_eq!(ctx, vec!["app/main.py-6-", "app/main.py:7:1:def run():", "app/main.py-8-    pass"]);
+    let ctx = lines(&["sym:run", "-A", "1", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&ctx[0]).unwrap();
+    assert_eq!(v["after"], serde_json::json!(["    pass"]));
+
+    // Exit codes: 1 for no hits, 2 for a bad query.
+    assert_eq!(e.scout().args(["calls", "Nope"]).status().unwrap().code(), Some(1));
+    assert_eq!(e.scout().args(["sym:x kind:bogus"]).status().unwrap().code(), Some(2));
 }

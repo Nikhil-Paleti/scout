@@ -29,7 +29,7 @@ use serde_json::json;
 use scout_index::index::{apply_changes, ApplyStats, Index};
 use scout_index::lock;
 use scout_index::manifest::{self, Manifest, SegmentInfo};
-use scout_index::merge::{merge, MergeInput};
+use scout_index::merge::{merge, merge_has_syms, MergeInput};
 use scout_index::{build, filter, BuildOptions, Rules};
 
 use crate::{priority, repo};
@@ -176,9 +176,48 @@ struct Worker {
     /// recorded in the manifest only once those paths are applied, so the
     /// stored commit never claims changes that weren't indexed.
     pending_commit: Option<String>,
+    /// Background symbol pass, when one is running.
+    sym_job: Option<std::thread::JoinHandle<()>>,
+    sym_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    last_sym_check: Instant,
 }
 
 impl Worker {
+    /// Starts the symbol backfill in its own thread if the index needs it.
+    fn maybe_symbolize(&mut self) {
+        if let Some(j) = &self.sym_job {
+            if !j.is_finished() {
+                return;
+            }
+            self.sym_job = None;
+        }
+        if self.last_sym_check.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.last_sym_check = Instant::now();
+        if !scout_index::symbolize::needed(&self.dir) {
+            return;
+        }
+        let (root, dir, threads, cancel) = (self.root.clone(), self.dir.clone(), self.threads, self.sym_cancel.clone());
+        self.sym_job = Some(std::thread::spawn(move || {
+            match scout_index::symbolize::backfill(&root, &dir, threads, false, &cancel) {
+                Ok(Some(s)) if s.segments > 0 => log(format!(
+                    "symbols: {} from {} files in {:.1?} ({:.1} MB)",
+                    s.symbols,
+                    s.files,
+                    s.time,
+                    s.bytes as f64 / 1e6
+                )),
+                Ok(_) => {}
+                Err(e) => log(format!("symbol indexing failed: {:#}", e)),
+            }
+        }));
+    }
+
+    fn symbolizing(&self) -> bool {
+        self.sym_job.as_ref().map(|j| !j.is_finished()).unwrap_or(false)
+    }
+
     fn rel(&self, p: &Path) -> Option<PathBuf> {
         if p.is_absolute() {
             p.strip_prefix(&self.root).ok().map(|r| r.to_path_buf())
@@ -346,12 +385,17 @@ impl Worker {
         let name = m.alloc_segment_name();
         let inputs: Vec<MergeInput> = index.segments[from..]
             .iter()
-            .map(|s| MergeInput { seg: &s.seg, del: if s.del.is_empty() { None } else { Some(&s.del) } })
+            .map(|s| MergeInput {
+                seg: &s.seg,
+                del: if s.del.is_empty() { None } else { Some(&s.del) },
+                syms: s.syms.as_ref(),
+            })
             .collect();
+        let syms = merge_has_syms(&inputs);
         let files = merge(&inputs, &self.dir.join(&name))?;
         drop(inputs);
         m.segments.truncate(from);
-        m.segments.push(SegmentInfo { name, files, kind: kind.to_string(), del: None, deleted: 0 });
+        m.segments.push(SegmentInfo::new(name, files, kind, syms));
         m.generation += 1;
         m.updated_at = manifest::now_secs();
         m.store(&self.dir)?;
@@ -368,6 +412,7 @@ impl Worker {
             "root": self.root,
             "uptime_secs": self.started.elapsed().as_secs(),
             "pending": self.pending.len(),
+            "symbolizing": self.symbolizing(),
             "applied_total": self.applied_total,
             "generation": m.as_ref().map(|m| m.generation),
             "last_apply": self.last_apply.as_ref().map(|(at, s, d)| json!({
@@ -433,6 +478,9 @@ pub fn serve(root: &Path, dir: &Path, opts: ServeOptions) -> Result<()> {
         git_stamp: repo::git_stamp(root),
         last_git_check: now,
         pending_commit: None,
+        sym_job: None,
+        sym_cancel: Default::default(),
+        last_sym_check: now - Duration::from_secs(60),
     };
     match existing {
         Some(m) if m.excludes == excludes => {
@@ -495,10 +543,15 @@ pub fn serve(root: &Path, dir: &Path, opts: ServeOptions) -> Result<()> {
                 }
             }
         }
-        if w.pending.is_empty() && w.last_activity.elapsed() >= opts.idle {
+        w.maybe_symbolize();
+        if w.pending.is_empty() && !w.symbolizing() && w.last_activity.elapsed() >= opts.idle {
             log("idle, exiting");
             break;
         }
+    }
+    w.sym_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(j) = w.sym_job.take() {
+        let _ = j.join();
     }
     let _ = fs::remove_file(&sock);
     let _ = fs::remove_file(dir.join("daemon.pid"));

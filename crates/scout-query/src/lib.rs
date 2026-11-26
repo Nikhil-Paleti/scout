@@ -4,6 +4,7 @@
 pub mod eval;
 pub mod filters;
 pub mod plan;
+mod symbols;
 
 use std::io;
 use std::path::Path;
@@ -61,6 +62,11 @@ pub struct Hit {
     pub text: Vec<u8>,
     /// Byte ranges of every match within `text`.
     pub ranges: Vec<(usize, usize)>,
+    /// For symbol hits: the kind (function, call, ...), the symbol's name
+    /// and, for calls, the function the call is in.
+    pub kind: Option<&'static str>,
+    pub symbol: Option<String>,
+    pub container: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -77,6 +83,8 @@ pub struct SearchStats {
     pub candidate_time: Duration,
     pub total_time: Duration,
     pub first_hit: Option<Duration>,
+    /// Symbol search ran while some segments still lack symbols.
+    pub symbols_incomplete: bool,
 }
 
 /// A compiled query: the matcher for verification plus the trigram plan.
@@ -94,12 +102,19 @@ fn has_upper(s: &str) -> bool {
     s.chars().any(|c| c.is_uppercase())
 }
 
-pub fn compile(query: &str, opts: &SearchOptions) -> Result<Compiled> {
-    let parsed = if opts.filters {
+pub fn parse(query: &str, opts: &SearchOptions) -> Result<filters::Parsed> {
+    Ok(if opts.filters {
         filters::parse(query)?
     } else {
         filters::Parsed { pattern: query.to_string(), ..Default::default() }
-    };
+    })
+}
+
+pub fn compile(query: &str, opts: &SearchOptions) -> Result<Compiled> {
+    compile_parsed(&parse(query, opts)?, opts)
+}
+
+pub fn compile_parsed(parsed: &filters::Parsed, opts: &SearchOptions) -> Result<Compiled> {
     let case = parsed.case.unwrap_or(opts.case);
     let insensitive = match case {
         Case::Sensitive => false,
@@ -165,12 +180,16 @@ fn shared_dirs(a: &str, near: &str) -> u32 {
     ad.split('/').zip(nd.split('/')).take_while(|(x, y)| x == y && !x.is_empty()).count() as u32
 }
 
-/// Ranks candidate files: near the current file first, vendored and test
-/// code last, path order otherwise.
+/// Lower is better: near the current file first, vendored and test code last.
+pub(crate) fn path_rank(p: &str, near: Option<&str>) -> u32 {
+    let near_bonus = near.map(|n| shared_dirs(p, n)).unwrap_or(0);
+    1000 + is_lowrank(p) * 8 - near_bonus.min(100) * 4
+}
+
+/// Ranks candidate files by `path_rank`, path order otherwise.
 fn rank(paths: &mut [(u32, String)], near: Option<&str>) {
     for (score, p) in paths.iter_mut() {
-        let near_bonus = near.map(|n| shared_dirs(p, n)).unwrap_or(0);
-        *score = 1000 + is_lowrank(p) * 8 - near_bonus.min(100) * 4;
+        *score = path_rank(p, near);
     }
     paths.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 }
@@ -203,7 +222,16 @@ impl Sink for HitSink<'_> {
         let col = ranges.first().map(|r| r.0 as u64 + 1).unwrap_or(1);
         let text = if line.len() > self.max_line { line[..self.max_line].to_vec() } else { line.to_vec() };
         ranges.retain(|r| r.1 <= text.len());
-        self.hits.push(Hit { path: self.path.to_string(), line: m.line_number().unwrap_or(0), col, text, ranges });
+        self.hits.push(Hit {
+            path: self.path.to_string(),
+            line: m.line_number().unwrap_or(0),
+            col,
+            text,
+            ranges,
+            kind: None,
+            symbol: None,
+            container: None,
+        });
         Ok(self.hits.len() < self.limit)
     }
 }
@@ -228,7 +256,11 @@ pub fn search(
     emit: &mut dyn FnMut(&Hit) -> bool,
 ) -> Result<SearchStats> {
     let t0 = Instant::now();
-    let compiled = compile(query, opts)?;
+    let parsed = parse(query, opts)?;
+    let compiled = compile_parsed(&parsed, opts)?;
+    if parsed.sym.is_some() {
+        return symbols::search(index, root, &parsed, &compiled, opts, emit);
+    }
     let mut stats = SearchStats {
         plan: compiled.plan.describe(),
         segments: index.segments.len(),

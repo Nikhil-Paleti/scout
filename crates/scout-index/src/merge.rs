@@ -8,14 +8,22 @@ use anyhow::Result;
 use roaring::RoaringBitmap;
 
 use crate::segment::{Segment, SegmentWriter};
+use crate::symfile::{merge_syms, sym_path, SymFile, SymMergeInput};
 
 pub struct MergeInput<'a> {
     pub seg: &'a Segment,
     pub del: Option<&'a RoaringBitmap>,
+    pub syms: Option<&'a SymFile>,
+}
+
+/// A merge writes a symbol sidecar only when every input has one.
+pub fn merge_has_syms(inputs: &[MergeInput]) -> bool {
+    !inputs.is_empty() && inputs.iter().all(|i| i.syms.is_some())
 }
 
 /// Merges `inputs` (oldest first) into a new segment at `out`. Returns the
 /// number of files written.
+/// Symbols are merged into `out`'s `.sym` sidecar when every input has them.
 pub fn merge(inputs: &[MergeInput], out: &Path) -> Result<u32> {
     // Live entries, newest copy of each path wins.
     let mut live: Vec<(&[u8], u32, u32)> = Vec::new();
@@ -77,5 +85,13 @@ pub fn merge(inputs: &[MergeInput], out: &Path) -> Result<u32> {
         w.add_postings(tri, &acc)?;
     }
     w.finish()?;
+    if merge_has_syms(inputs) {
+        let sym_inputs: Vec<SymMergeInput> = inputs
+            .iter()
+            .zip(&remap)
+            .map(|(i, r)| SymMergeInput { syms: i.syms.unwrap(), remap: r })
+            .collect();
+        merge_syms(&sym_inputs, &sym_path(out))?;
+    }
     Ok(nfiles)
 }

@@ -13,12 +13,15 @@ use crate::filter;
 use crate::manifest::{self, Manifest, SegmentInfo};
 use crate::rules::Rules;
 use crate::segment::{FileMeta, Segment, SegmentWriter};
+use crate::symfile::{sym_path, SymBuilder, SymFile};
+use scout_symbols::Sym;
 use crate::trigram::Extractor;
 
 pub struct LoadedSegment {
     pub info: SegmentInfo,
     pub seg: Segment,
     pub del: RoaringBitmap,
+    pub syms: Option<SymFile>,
 }
 
 impl LoadedSegment {
@@ -72,7 +75,8 @@ impl Index {
                 Some(d) => load_del(dir, d)?,
                 None => RoaringBitmap::new(),
             };
-            segments.push(LoadedSegment { info: info.clone(), seg, del });
+            let syms = if info.syms { Some(SymFile::open(&dir.join(info.sym_name()))?) } else { None };
+            segments.push(LoadedSegment { info: info.clone(), seg, del, syms });
         }
         Ok(Index { dir: dir.to_path_buf(), manifest, segments })
     }
@@ -133,7 +137,8 @@ pub fn apply_changes(
     let mut manifest = index.manifest.clone();
     let root = rules.root().to_path_buf();
     let mut stats = ApplyStats::default();
-    let mut new_files: Vec<(Vec<u8>, FileMeta, Vec<u32>)> = Vec::new();
+    let symbols = manifest.symbols;
+    let mut new_files: Vec<NewFile> = Vec::new();
     let mut tomb: Vec<RoaringBitmap> = index.segments.iter().map(|s| s.del.clone()).collect();
     let mut touched = vec![false; index.segments.len()];
     let mut ex = Extractor::new();
@@ -147,7 +152,7 @@ pub fn apply_changes(
         let current = index.lookup(&rel_bytes);
         let abs = root.join(rel);
         let md = fs::symlink_metadata(&abs).ok().filter(|m| m.is_file());
-        let mut keep: Option<(FileMeta, Vec<u32>)> = None;
+        let mut keep: Option<(FileMeta, Vec<u32>, Vec<Sym>)> = None;
         if let Some(md) = &md {
             if rules.check(rel, false).is_included() && filter::check_size(md.len(), max_file_size).is_none() {
                 if let Some((si, id)) = current {
@@ -157,7 +162,9 @@ pub fn apply_changes(
                         continue;
                     }
                 }
-                if let Ok(Extracted::Indexed { meta, trigrams, .. }) = read_and_extract(&abs, max_file_size, &mut ex) {
+                if let Ok(Extracted::Indexed { meta, trigrams, syms, .. }) =
+                    read_and_extract(&abs, max_file_size, &mut ex, symbols)
+                {
                     if let Some((si, id)) = current {
                         if index.segments[si].seg.meta(id).hash == meta.hash {
                             // Content is identical (touched or reverted): keep the
@@ -166,7 +173,7 @@ pub fn apply_changes(
                             continue;
                         }
                     }
-                    keep = Some((meta, trigrams));
+                    keep = Some((meta, trigrams, syms));
                 }
             }
         }
@@ -179,9 +186,9 @@ pub fn apply_changes(
             }
         }
         match keep {
-            Some((meta, tris)) => {
+            Some((meta, tris, syms)) => {
                 stats.indexed += 1;
-                new_files.push((rel_bytes, meta, tris));
+                new_files.push(NewFile { path: rel_bytes, meta, trigrams: tris, syms });
             }
             None => {
                 if current.is_some() {
@@ -204,14 +211,8 @@ pub fn apply_changes(
     let gen = manifest.generation;
     if !new_files.is_empty() {
         let name = manifest.alloc_segment_name();
-        write_small_segment(&dir.join(&name), &new_files)?;
-        manifest.segments.push(SegmentInfo {
-            name: name.clone(),
-            files: new_files.len() as u32,
-            kind: "delta".to_string(),
-            del: None,
-            deleted: 0,
-        });
+        write_small_segment(&dir.join(&name), &new_files, symbols)?;
+        manifest.segments.push(SegmentInfo::new(name.clone(), new_files.len() as u32, "delta", symbols));
         stats.segment = Some(name);
     }
     for (si, t) in touched.iter().enumerate() {
@@ -234,16 +235,32 @@ pub fn apply_changes(
     Ok(stats)
 }
 
-/// Writes a segment from an in-memory list of files (sorted by path here).
-pub fn write_small_segment(path: &Path, files: &[(Vec<u8>, FileMeta, Vec<u32>)]) -> Result<()> {
+/// One file to put in a small segment.
+pub struct NewFile {
+    pub path: Vec<u8>,
+    pub meta: FileMeta,
+    pub trigrams: Vec<u32>,
+    pub syms: Vec<Sym>,
+}
+
+/// Writes a segment from an in-memory list of files (sorted by path here),
+/// plus its symbol sidecar when `symbols` is set.
+pub fn write_small_segment(path: &Path, files: &[NewFile], symbols: bool) -> Result<()> {
     let mut order: Vec<usize> = (0..files.len()).collect();
-    order.sort_by(|&a, &b| files[a].0.cmp(&files[b].0));
+    order.sort_by(|&a, &b| files[a].path.cmp(&files[b].path));
     let mut pairs: Vec<u64> = Vec::new();
+    let mut sb = SymBuilder::new();
     let mut w = SegmentWriter::create(path)?;
     for (new_id, &i) in order.iter().enumerate() {
-        let (p, m, tris) = &files[i];
-        w.add_file(p, *m);
-        pairs.extend(tris.iter().map(|&t| ((t as u64) << 32) | new_id as u64));
+        let f = &files[i];
+        w.add_file(&f.path, f.meta);
+        pairs.extend(f.trigrams.iter().map(|&t| ((t as u64) << 32) | new_id as u64));
+        if symbols {
+            sb.add(new_id as u32, &f.syms);
+        }
+    }
+    if symbols {
+        sb.write(&sym_path(path))?;
     }
     pairs.sort_unstable();
     let mut ids = Vec::new();

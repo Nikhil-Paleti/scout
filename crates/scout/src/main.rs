@@ -2,6 +2,7 @@
 
 mod args;
 mod daemon;
+mod output;
 mod priority;
 mod repo;
 
@@ -16,15 +17,18 @@ use serde_json::json;
 use args::Args;
 use scout_index::manifest::{self, index_dir_for, Manifest};
 use scout_index::{build, filter, BuildOptions, Index, Rules, Verdict};
+use output::{Format, Printer};
 use scout_query::{Case, SearchOptions};
 
 const USAGE: &str = "\
 scout: indexed code search
 
 USAGE:
-  scout build   [--root DIR] [--exclude GLOB]... [--threads N] [--mem-mb N] [--no-nice] [--quiet]
-  scout search  [--root DIR] [--vimgrep|--json|--files] [-F] [-w] [-s|-i] [--max N]
-                [--near PATH] [--no-filters] [--stats] [--threads N] QUERY
+  scout [search] [OPTIONS] QUERY      search the index (see QUERY below)
+  scout sym NAME [FILTERS]            definitions, same as `scout 'sym:NAME'`
+  scout calls NAME [FILTERS]          call sites, same as `scout 'calls:NAME'`
+  scout refs NAME [FILTERS]           whole-word uses, same as `scout 'refs:NAME'`
+  scout build   [--root DIR] [--exclude GLOB]... [--threads N] [--mem-mb N] [--no-nice] [--no-symbols] [--quiet]
   scout files   [--root DIR]
   scout serve   [--root DIR] [--foreground] [--exclude GLOB]... [--idle-secs N]
   scout notify  [--root DIR] [--start] PATH...
@@ -33,8 +37,27 @@ USAGE:
   scout stop    [--root DIR]
   scout version
 
-QUERY is a regex with optional filters: file:RE -file:RE lang:NAME case:yes|no|auto
-Smart case by default. Exit status: 0 matches, 1 no matches, 2 error.
+SEARCH OPTIONS:
+  --json            one JSON object per hit, then a summary object (for tools and agents)
+  --vimgrep         path:line:col:text, no color or annotations
+  -l, --files       matching file names only
+  -C/-A/-B N        context lines around (after, before) each hit
+  -m, --max N       stop after N hits (default 5000)
+  -F, -w, -s, -i    fixed string, whole word, case sensitive, ignore case
+  --near PATH       rank results near this file first
+  --color WHEN      always, never or auto (default; honors NO_COLOR)
+  --root DIR        repository root (default: git root of the current directory)
+  --stats           print timing to stderr
+
+QUERY is a regex (smart case) with optional filters:
+  file:RE  -file:RE  lang:NAME  -lang:NAME  case:yes|no|auto
+  sym:NAME     definitions (functions, methods, types, macros, Bazel targets)
+  calls:NAME   call sites of NAME, with the function each call is in
+  refs:NAME    whole-word, case-sensitive matches of NAME
+  kind:K       with sym:/calls:, e.g. kind:function, kind:class, kind:target
+Symbols are matched by name only (no type resolution): same-named functions mix.
+
+Exit status: 0 hits, 1 no hits, 2 error.
 ";
 
 fn main() -> ExitCode {
@@ -44,10 +67,14 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let cmd = argv.remove(0);
+    let all: Vec<String> = std::iter::once(cmd.clone()).chain(argv.iter().cloned()).collect();
     let args = Args::new(argv);
     let r = match cmd.as_str() {
         "build" => cmd_build(args),
-        "search" => cmd_search(args),
+        "search" | "s" => cmd_search(args, ""),
+        "sym" => cmd_search(args, "sym:"),
+        "calls" | "callers" => cmd_search(args, "calls:"),
+        "refs" => cmd_search(args, "refs:"),
         "files" => cmd_files(args),
         "serve" => cmd_serve(args),
         "notify" => cmd_notify(args),
@@ -58,7 +85,8 @@ fn main() -> ExitCode {
             println!("scout {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
         }
-        other => Err(anyhow::anyhow!("unknown command `{}`\n\n{}", other, USAGE)),
+        // `scout QUERY` is short for `scout search QUERY`.
+        _ => cmd_search(Args::new(all), ""),
     };
     match r {
         Ok(code) => ExitCode::from(code),
@@ -92,6 +120,7 @@ fn cmd_build(mut a: Args) -> Result<u8> {
     let no_nice = a.flag(&["--no-nice"]);
     let quiet = a.flag(&["--quiet", "-q"]);
     let json_out = a.flag(&["--json"]);
+    let no_symbols = a.flag(&["--no-symbols"]);
     a.positionals()?;
     if !no_nice {
         priority::background();
@@ -107,6 +136,7 @@ fn cmd_build(mut a: Args) -> Result<u8> {
         excludes,
         commit: repo::head(&root),
         progress: !quiet && !json_out,
+        symbols: !no_symbols,
         ..Default::default()
     };
     let st = build::build_full(&root, &dir, &opts)?;
@@ -116,6 +146,7 @@ fn cmd_build(mut a: Args) -> Result<u8> {
             json!({
                 "root": root, "index_dir": dir, "files": st.files_indexed, "bytes": st.bytes_indexed,
                 "index_bytes": st.index_bytes, "trigrams": st.trigrams, "batches": st.batches,
+                "symbols": st.symbols, "sym_bytes": st.sym_bytes, "sym_cpu_ms": st.sym_cpu.as_millis() as u64,
                 "skipped": {"large": st.skipped_large, "binary": st.skipped_binary,
                             "minified": st.skipped_minified, "unreadable": st.skipped_unreadable},
                 "walk_ms": st.walk_time.as_millis() as u64, "total_ms": st.total_time.as_millis() as u64,
@@ -132,10 +163,38 @@ fn cmd_build(mut a: Args) -> Result<u8> {
             st.trigrams,
             st.batches
         );
+        if opts.symbols {
+            eprintln!("scout: text search is ready; indexing symbols (sym:, calls:) next");
+        }
         eprintln!(
             "scout: skipped {} large, {} binary, {} minified, {} unreadable",
             st.skipped_large, st.skipped_binary, st.skipped_minified, st.skipped_unreadable
         );
+    }
+    if opts.symbols {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        match scout_index::symbolize::backfill(&root, &dir, opts.threads, !quiet && !json_out, &cancel)? {
+            Some(ss) => {
+                if json_out {
+                    println!(
+                        "{}",
+                        json!({"symbols": ss.symbols, "sym_bytes": ss.bytes, "sym_files": ss.files,
+                               "sym_ms": ss.time.as_millis() as u64, "sym_cpu_ms": ss.cpu.as_millis() as u64})
+                    );
+                } else if !quiet {
+                    eprintln!(
+                        "scout: {} symbols from {} files in {:.1?} ({:.1?} CPU); {:.1} MB",
+                        ss.symbols,
+                        ss.files,
+                        ss.time,
+                        ss.cpu,
+                        ss.bytes as f64 / 1e6
+                    );
+                }
+            }
+            None if !quiet => eprintln!("scout: the daemon is indexing symbols"),
+            None => {}
+        }
     }
     // Tell a running daemon to pick up anything that changed during the build.
     if daemon::is_running(&dir) {
@@ -151,25 +210,29 @@ fn open_index(dir: &Path, root: &Path) -> Result<Index> {
     Index::open(dir)
 }
 
-fn cmd_search(mut a: Args) -> Result<u8> {
+fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     let (root, dir) = root_and_dir(&mut a)?;
     let json_out = a.flag(&["--json"]);
-    let files_out = a.flag(&["--files", "-l"]);
-    let _ = a.flag(&["--vimgrep"]);
+    let files_out = a.flag(&["--files-with-matches", "--files", "-l"]);
+    let vimgrep = a.flag(&["--vimgrep"]);
     let fixed = a.flag(&["--fixed-strings", "-F"]);
     let word = a.flag(&["--word-regexp", "-w"]);
     let sensitive = a.flag(&["--case-sensitive", "-s"]);
     let insensitive = a.flag(&["--ignore-case", "-i"]);
     let no_filters = a.flag(&["--no-filters"]);
     let show_stats = a.flag(&["--stats"]);
-    let max: Option<usize> = a.parsed(&["--max", "-m"])?;
+    let max: Option<usize> = a.parsed(&["--max-count", "--max", "-m"])?;
     let threads: Option<usize> = a.parsed(&["--threads", "-j"])?;
+    let ctx: Option<usize> = a.parsed(&["--context", "-C"])?;
+    let before: Option<usize> = a.parsed(&["--before-context", "-B"])?;
+    let after: Option<usize> = a.parsed(&["--after-context", "-A"])?;
+    let color = a.opt(&["--color"])?;
     let near = a.opt(&["--near"])?;
     let pos = a.positionals()?;
     if pos.is_empty() {
         bail!("search needs a QUERY");
     }
-    let query = pos.join(" ");
+    let query = format!("{}{}", prefix, pos.join(" "));
     let mut opts = SearchOptions {
         fixed,
         word,
@@ -194,34 +257,32 @@ fn cmd_search(mut a: Args) -> Result<u8> {
         let p = if p.is_absolute() { p } else { std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p) };
         p.strip_prefix(&root).map(|r| r.display().to_string()).unwrap_or(n)
     });
+    let format = if json_out {
+        Format::Json
+    } else if files_out {
+        Format::Files
+    } else if vimgrep {
+        Format::Vimgrep
+    } else {
+        Format::Text
+    };
+    let color = match color.as_deref() {
+        Some("always") => true,
+        Some("never") => false,
+        Some("auto") | None => output::stdout_is_tty() && std::env::var_os("NO_COLOR").is_none(),
+        Some(other) => bail!("--color takes always, never or auto, not `{}`", other),
+    };
+    let b = before.or(ctx).unwrap_or(0);
+    let af = after.or(ctx).unwrap_or(0);
 
     let index = open_index(&dir, &root)?;
     let stdout = io::stdout();
-    let mut out = BufWriter::with_capacity(64 * 1024, stdout.lock());
+    let out = BufWriter::with_capacity(64 * 1024, stdout.lock());
+    let mut pr = Printer::new(out, format, color, b, af, &root);
     let mut err: Option<io::Error> = None;
-    let mut n = 0usize;
-    let mut last_file = String::new();
     let stats = scout_query::search(&index, &root, &query, &opts, &mut |h| {
-        let r = if files_out {
-            if h.path == last_file {
-                return true;
-            }
-            last_file = h.path.clone();
-            writeln!(out, "{}", h.path)
-        } else if json_out {
-            let v = json!({
-                "path": h.path, "line": h.line, "col": h.col,
-                "text": String::from_utf8_lossy(&h.text), "ranges": h.ranges,
-            });
-            writeln!(out, "{}", v)
-        } else {
-            out.write_all(format!("{}:{}:{}:", h.path, h.line, h.col).as_bytes())
-                .and_then(|_| out.write_all(&String::from_utf8_lossy(&h.text).into_owned().into_bytes()))
-                .and_then(|_| out.write_all(b"\n"))
-        };
-        n += 1;
         // Flush early so a picker shows the first results right away.
-        let r = r.and_then(|_| if n == 1 || n % 200 == 0 { out.flush() } else { Ok(()) });
+        let r = pr.hit(h).and_then(|_| if pr.hits == 1 || pr.hits % 200 == 0 { pr.flush() } else { Ok(()) });
         if let Err(e) = r {
             err = Some(e);
             return false;
@@ -231,7 +292,12 @@ fn cmd_search(mut a: Args) -> Result<u8> {
     if let Some(e) = err {
         return Err(e.into());
     }
-    out.flush()?;
+    pr.flush_after(None)?;
+    pr.summary(&stats)?;
+    pr.flush()?;
+    if stats.symbols_incomplete && format != Format::Json {
+        eprintln!("scout: symbols are still being indexed; results may be incomplete");
+    }
     if show_stats {
         eprintln!(
             "scout: plan {}\nscout: {} segments, {} live files, {} candidates, {} searched, {} matched, {} matches{}\nscout: plan {:.2?}, candidates {:.2?}, first hit {}, total {:.2?}",

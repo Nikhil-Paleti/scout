@@ -6,6 +6,7 @@ license.workspace = true
 description = "Trigram segment format, builder, merger and ignore rules for scout"
 
 [dependencies]
+scout-symbols = { path = "../scout-symbols" }
 anyhow.workspace = true
 ignore.workspace = true
 memmap2.workspace = true

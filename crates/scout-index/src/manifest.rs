@@ -25,6 +25,19 @@ pub struct SegmentInfo {
     /// Number of tombstoned files.
     #[serde(default)]
     pub deleted: u32,
+    /// Whether a `.sym` sidecar with this segment's symbols exists.
+    #[serde(default)]
+    pub syms: bool,
+}
+
+impl SegmentInfo {
+    pub fn new(name: String, files: u32, kind: &str, syms: bool) -> SegmentInfo {
+        SegmentInfo { name, files, kind: kind.to_string(), del: None, deleted: 0, syms }
+    }
+
+    pub fn sym_name(&self) -> String {
+        format!("{}.sym", self.name.trim_end_matches(".idx"))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +63,9 @@ pub struct Manifest {
     /// Unix seconds of the last change applied.
     #[serde(default)]
     pub updated_at: u64,
+    /// Whether files are indexed with symbols (definitions and calls).
+    #[serde(default)]
+    pub symbols: bool,
 }
 
 impl Manifest {
@@ -64,6 +80,7 @@ impl Manifest {
             segments: Vec::new(),
             built_at: 0,
             updated_at: 0,
+            symbols: false,
         }
     }
 
@@ -164,6 +181,9 @@ pub fn gc(dir: &Path, m: &Manifest) {
     let mut keep: std::collections::HashSet<String> = std::collections::HashSet::new();
     for s in &m.segments {
         keep.insert(s.name.clone());
+        if s.syms {
+            keep.insert(s.sym_name());
+        }
         if let Some(d) = &s.del {
             keep.insert(d.clone());
         }

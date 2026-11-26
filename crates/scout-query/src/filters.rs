@@ -1,5 +1,7 @@
 //! Query syntax: a regex plus optional `file:`, `-file:`, `lang:`,
-//! `-lang:` and `case:` filters, zoekt style.
+//! `-lang:` and `case:` filters, zoekt style. `sym:NAME` and `calls:NAME`
+//! switch to symbol search (with optional `kind:`), and `refs:NAME` is a
+//! whole-word, case-sensitive text search for NAME.
 
 use anyhow::{bail, Result};
 
@@ -16,6 +18,38 @@ pub struct Parsed {
     pub file: Vec<String>,
     pub not_file: Vec<String>,
     pub case: Option<Case>,
+    /// Symbol search instead of text search.
+    pub sym: Option<SymMode>,
+    /// The name (or name regex) for `sym:`/`calls:`.
+    pub name: String,
+    /// `kind:` filters for symbol search.
+    pub kinds: Vec<String>,
+    #[doc(hidden)]
+    pub refs: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SymMode {
+    /// `sym:` — definitions.
+    Defs,
+    /// `calls:` — call sites.
+    Calls,
+}
+
+/// `Foo::bar`, `Foo.bar` and `Foo#bar` name `bar`; symbols are stored by
+/// their last component.
+fn last_component(v: &str) -> &str {
+    let cut = [v.rfind("::").map(|i| i + 2), v.rfind('.').map(|i| i + 1), v.rfind('#').map(|i| i + 1)]
+        .into_iter()
+        .flatten()
+        .max();
+    match cut {
+        // Keep regex-looking values (`a.b`, `foo.*`) intact.
+        Some(i) if i < v.len() && v[i..].chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !v.contains('*') => {
+            &v[i..]
+        }
+        _ => v,
+    }
 }
 
 /// File extension (or exact file name) regexes per language name.
@@ -102,10 +136,39 @@ pub fn parse(query: &str) -> Result<Parsed> {
                     _ => bail!("case: takes yes, no or auto"),
                 });
             }
+            "sym" | "s" | "calls" | "callers" | "c" if !neg => {
+                if out.sym.is_some() {
+                    bail!("use one of sym: and calls: per query");
+                }
+                any_filter = true;
+                out.sym = Some(if key.starts_with('s') { SymMode::Defs } else { SymMode::Calls });
+                out.name = last_component(val).to_string();
+            }
+            "refs" | "ref" | "r" if !neg => {
+                any_filter = true;
+                let name = last_component(val);
+                out.refs = Some(format!(r"\b{}\b", regex_syntax::escape(name)));
+            }
+            "kind" | "k" if !neg => {
+                any_filter = true;
+                for k in val.split(',') {
+                    out.kinds.push(k.to_string());
+                }
+            }
             _ => rest.push(tok),
         }
     }
-    out.pattern = if any_filter { rest.join(" ") } else { query.to_string() };
+    out.pattern = if any_filter { rest.join(" ").trim().to_string() } else { query.to_string() };
+    if let Some(r) = out.refs.take() {
+        if !out.pattern.is_empty() {
+            bail!("refs: takes no other search text");
+        }
+        out.pattern = r;
+        out.case.get_or_insert(Case::Sensitive);
+    }
+    if !out.kinds.is_empty() && out.sym.is_none() {
+        bail!("kind: only works with sym: or calls:");
+    }
     Ok(out)
 }
 
@@ -120,6 +183,25 @@ mod tests {
         assert_eq!(p.file, vec!["src/".to_string(), r"\.(go)$".to_string()]);
         assert_eq!(p.not_file, vec!["_test".to_string()]);
         assert_eq!(p.case, Some(Case::Sensitive));
+    }
+
+    #[test]
+    fn parses_symbol_queries() {
+        let p = parse("sym:Widget::Draw lang:cpp kind:method").unwrap();
+        assert_eq!(p.sym, Some(SymMode::Defs));
+        assert_eq!(p.name, "Draw");
+        assert_eq!(p.kinds, vec!["method".to_string()]);
+        assert_eq!(p.pattern, "");
+        let p = parse("calls:kmalloc file:mm/ GFP").unwrap();
+        assert_eq!(p.sym, Some(SymMode::Calls));
+        assert_eq!(p.name, "kmalloc");
+        assert_eq!(p.pattern, "GFP");
+        assert_eq!(parse("sym:foo.*bar").unwrap().name, "foo.*bar");
+        let p = parse("refs:self.run").unwrap();
+        assert_eq!(p.sym, None);
+        assert_eq!(p.pattern, r"\brun\b");
+        assert_eq!(p.case, Some(Case::Sensitive));
+        assert!(parse("kind:function foo").is_err());
     }
 
     #[test]
