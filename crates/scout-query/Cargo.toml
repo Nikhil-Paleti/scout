@@ -1,0 +1,18 @@
+[package]
+name = "scout-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Regex to trigram planning, candidate selection and verification for scout"
+
+[dependencies]
+anyhow.workspace = true
+grep-matcher.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+rayon.workspace = true
+regex-syntax.workspace = true
+scout-index = { path = "../scout-index" }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/scout-index", "crates/scout-query", "crates/scout"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+grep-matcher = "0.1.10"
+grep-regex = "0.1.15"
+grep-searcher = "0.1.18"
+ignore = "0.4.35"
+libc = "0.2"
+memmap2 = "0.9"
+rayon = "1.10"
+regex-syntax = "0.8"
+roaring = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+panic = "abort"
+debug = false
