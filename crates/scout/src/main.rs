@@ -2,6 +2,7 @@
 
 mod args;
 mod daemon;
+mod mcp;
 mod output;
 mod priority;
 mod repo;
@@ -34,6 +35,7 @@ USAGE:
   scout notify  [--root DIR] [--start] PATH...
   scout reconcile [--root DIR] [--full]
   scout status  [--root DIR] [--json] [--why PATH]
+  scout mcp     [--root DIR]          MCP server on stdio, for agents (Claude Code and others)
   scout stop    [--root DIR]
   scout version
 
@@ -48,6 +50,7 @@ SEARCH OPTIONS:
   --color WHEN      always, never or auto (default; honors NO_COLOR)
   --root DIR        repository root (default: git root of the current directory)
   --stats           print timing to stderr
+  --no-auto-index   with no index, fail instead of scanning files and building one in the background
 
 QUERY is a regex (smart case) with optional filters:
   file:RE  -file:RE  lang:NAME  -lang:NAME  case:yes|no|auto
@@ -56,6 +59,9 @@ QUERY is a regex (smart case) with optional filters:
   refs:NAME    whole-word, case-sensitive matches of NAME
   kind:K       with sym:/calls:, e.g. kind:function, kind:class, kind:target
 Symbols are matched by name only (no type resolution): same-named functions mix.
+
+With no index yet, search starts building one in the background and scans the
+files directly meanwhile (--json summaries say \"index_status\":\"building\").
 
 Exit status: 0 hits, 1 no hits, 2 error.
 ";
@@ -80,6 +86,7 @@ fn main() -> ExitCode {
         "notify" => cmd_notify(args),
         "reconcile" => cmd_reconcile(args),
         "status" => cmd_status(args),
+        "mcp" => cmd_mcp(args),
         "stop" => cmd_stop(args),
         "version" | "--version" | "-V" => {
             println!("scout {}", env!("CARGO_PKG_VERSION"));
@@ -210,6 +217,14 @@ fn open_index(dir: &Path, root: &Path) -> Result<Index> {
     Index::open(dir)
 }
 
+/// Starts the daemon, which builds the index when there is none. One daemon
+/// runs per index, so concurrent callers start at most one build.
+pub fn start_background_build(root: &Path, dir: &Path) {
+    if let Err(e) = daemon::spawn_detached(root, dir, &None, Duration::from_secs(30 * 60)) {
+        eprintln!("scout: could not start the background build: {:#}", e);
+    }
+}
+
 fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     let (root, dir) = root_and_dir(&mut a)?;
     let json_out = a.flag(&["--json"]);
@@ -228,6 +243,7 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     let after: Option<usize> = a.parsed(&["--after-context", "-A"])?;
     let color = a.opt(&["--color"])?;
     let near = a.opt(&["--near"])?;
+    let no_auto = a.flag(&["--no-auto-index"]);
     let pos = a.positionals()?;
     if pos.is_empty() {
         bail!("search needs a QUERY");
@@ -275,12 +291,23 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     let b = before.or(ctx).unwrap_or(0);
     let af = after.or(ctx).unwrap_or(0);
 
-    let index = open_index(&dir, &root)?;
+    // No index yet: start building one in the background and answer this
+    // query with a plain scan, so nobody has to wait or run a build first.
+    let building = !no_auto && !Manifest::exists(&dir);
+    let index = if building {
+        start_background_build(&root, &dir);
+        if format != Format::Json {
+            eprintln!("scout: no index yet for {}; building one in the background, scanning files for now", root.display());
+        }
+        None
+    } else {
+        Some(open_index(&dir, &root)?)
+    };
     let stdout = io::stdout();
     let out = BufWriter::with_capacity(64 * 1024, stdout.lock());
     let mut pr = Printer::new(out, format, color, b, af, &root);
     let mut err: Option<io::Error> = None;
-    let stats = scout_query::search(&index, &root, &query, &opts, &mut |h| {
+    let mut emit = |h: &scout_query::Hit| {
         // Flush early so a picker shows the first results right away.
         let r = pr.hit(h).and_then(|_| if pr.hits == 1 || pr.hits % 200 == 0 { pr.flush() } else { Ok(()) });
         if let Err(e) = r {
@@ -288,12 +315,16 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
             return false;
         }
         true
-    })?;
+    };
+    let stats = match &index {
+        Some(index) => scout_query::search(index, &root, &query, &opts, &mut emit)?,
+        None => scout_query::search_unindexed(&root, &query, &opts, &mut emit)?,
+    };
     if let Some(e) = err {
         return Err(e.into());
     }
     pr.flush_after(None)?;
-    pr.summary(&stats)?;
+    pr.summary(&stats, building)?;
     pr.flush()?;
     if stats.symbols_incomplete && format != Format::Json {
         eprintln!("scout: symbols are still being indexed; results may be incomplete");
@@ -316,6 +347,13 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
         );
     }
     Ok(if stats.matches > 0 { 0 } else { 1 })
+}
+
+fn cmd_mcp(mut a: Args) -> Result<u8> {
+    let (root, dir) = root_and_dir(&mut a)?;
+    a.positionals()?;
+    mcp::serve(&root, &dir)?;
+    Ok(0)
 }
 
 fn cmd_files(mut a: Args) -> Result<u8> {
@@ -399,6 +437,36 @@ fn cmd_stop(mut a: Args) -> Result<u8> {
     Ok(0)
 }
 
+/// Index and daemon state, as `scout status --json` prints it.
+pub fn status_json(root: &Path, dir: &Path) -> serde_json::Value {
+    let index = Index::open(dir).ok();
+    let head = repo::head(root);
+    let socket = daemon::socket_path(dir);
+    let Some(i) = index else {
+        // A daemon with no index is busy with the first build and won't
+        // answer `status` until it's done; a ping is enough.
+        return json!({
+            "root": root, "index_dir": dir, "indexed": false, "head": head,
+            "building": daemon::is_running(dir), "socket": socket,
+        });
+    };
+    let daemon_status = daemon::send(dir, &["status".to_string()], true)
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    let m = &i.manifest;
+    json!({
+        "root": root, "index_dir": dir, "indexed": true, "socket": socket,
+        "files": i.live_count(), "segments": m.segments.len(),
+        "deltas": m.segments.iter().filter(|s| s.kind == "delta").count(),
+        "index_bytes": i.disk_bytes(), "commit": m.commit, "head": head,
+        "stale_commit": head.is_some() && m.commit != head,
+        "symbols": if !m.symbols { "off" } else if i.symbols_ready() { "ready" } else { "indexing" },
+        "excludes": m.excludes, "built_at": m.built_at, "updated_at": m.updated_at,
+        "generation": m.generation, "daemon": daemon_status,
+    })
+}
+
 fn cmd_status(mut a: Args) -> Result<u8> {
     let (root, dir) = root_and_dir(&mut a)?;
     let json_out = a.flag(&["--json"]);
@@ -439,30 +507,9 @@ fn cmd_status(mut a: Args) -> Result<u8> {
 
     let index = Index::open(&dir).ok();
     let head = repo::head(&root);
-    let daemon_status = daemon::send(&dir, &["status".to_string()], true)
-        .ok()
-        .flatten()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-    let socket = daemon::socket_path(&dir);
+    let v = status_json(&root, &dir);
+    let daemon_status = v.get("daemon").cloned().filter(|d| !d.is_null());
     if json_out {
-        let v = match &index {
-            None => json!({
-                "root": root, "index_dir": dir, "indexed": false, "head": head,
-                "daemon": daemon_status, "socket": socket,
-            }),
-            Some(i) => {
-                let m = &i.manifest;
-                json!({
-                    "root": root, "index_dir": dir, "indexed": true, "socket": socket,
-                    "files": i.live_count(), "segments": m.segments.len(),
-                    "deltas": m.segments.iter().filter(|s| s.kind == "delta").count(),
-                    "index_bytes": i.disk_bytes(), "commit": m.commit, "head": head,
-                    "stale_commit": head.is_some() && m.commit != head,
-                    "excludes": m.excludes, "built_at": m.built_at, "updated_at": m.updated_at,
-                    "generation": m.generation, "daemon": daemon_status,
-                })
-            }
-        };
         println!("{}", v);
         return Ok(0);
     }
@@ -476,6 +523,16 @@ fn cmd_status(mut a: Args) -> Result<u8> {
             println!("files:     {}", i.live_count());
             println!("segments:  {} ({} delta)", m.segments.len(), deltas);
             println!("size:      {:.1} MB", i.disk_bytes() as f64 / 1e6);
+            println!(
+                "symbols:   {}",
+                if !m.symbols {
+                    "off"
+                } else if i.symbols_ready() {
+                    "ready"
+                } else {
+                    "indexing"
+                }
+            );
             if !m.excludes.is_empty() {
                 println!("excludes:  {}", m.excludes.join(", "));
             }

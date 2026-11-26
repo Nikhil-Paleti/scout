@@ -117,7 +117,7 @@ fn build_search_and_exit_codes() {
     e.write(".hidden/b.txt", "alpha_handler in a hidden dir\n");
     e.write(".gitignore", "out/\n");
     e.write("out/gen.rs", "fn alpha_handler() {}\n");
-    let st = e.scout().args(["search", "alpha"]).output().unwrap();
+    let st = e.scout().args(["search", "--no-auto-index", "alpha"]).output().unwrap();
     assert_eq!(st.status.code(), Some(2), "no index yet");
     assert!(e.scout().args(["build", "--quiet"]).status().unwrap().success());
     assert_eq!(
@@ -252,4 +252,126 @@ fn symbols_and_output_formats() {
     // Exit codes: 1 for no hits, 2 for a bad query.
     assert_eq!(e.scout().args(["calls", "Nope"]).status().unwrap().code(), Some(1));
     assert_eq!(e.scout().args(["sym:x kind:bogus"]).status().unwrap().code(), Some(2));
+}
+
+impl Env {
+    fn status(&self) -> serde_json::Value {
+        let out = self.scout().args(["status", "--json"]).output().unwrap();
+        serde_json::from_slice(&out.stdout).unwrap()
+    }
+
+    /// Waits for a background-built index, then stops its daemon.
+    fn wait_indexed_and_stop(&self) {
+        let t = Instant::now();
+        while self.status()["indexed"] != true {
+            assert!(t.elapsed() < Duration::from_secs(20), "background build never finished");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = self.scout().arg("stop").status();
+    }
+}
+
+fn json_lines(out: &[u8]) -> Vec<serde_json::Value> {
+    String::from_utf8_lossy(out).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+#[test]
+fn search_without_index_scans_and_builds() {
+    let e = Env::new();
+    e.write("src/a.rs", "fn beta_handler() {}\nfn main() { beta_handler(); }\n");
+    e.write(".hidden/b.txt", "beta_handler in a hidden dir\n");
+    e.write(".gitignore", "out/\n");
+    e.write("out/gen.rs", "fn beta_handler() {}\n");
+    e.write("min.js", &format!("var beta_handler=1;{}\n", "x".repeat(2000)));
+    fs::write(e.root.join("blob.bin"), b"beta_handler\0\0\0").unwrap();
+
+    // Text output: same hits the index would give, plus a note on stderr.
+    let out = e.scout().args(["search", "--vimgrep", "beta_handler"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    let mut lines: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect();
+    lines.sort();
+    assert_eq!(
+        lines,
+        vec![
+            ".hidden/b.txt:1:1:beta_handler in a hidden dir",
+            "src/a.rs:1:4:fn beta_handler() {}",
+            "src/a.rs:2:13:fn main() { beta_handler(); }",
+        ]
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("building one in the background"));
+
+    // Filters and exit codes work the same way.
+    let none = e.scout().args(["search", "zzz_nothing_here"]).output().unwrap();
+    assert_eq!(none.status.code(), Some(1));
+    let json = e.scout().args(["search", "--json", "beta_handler file:src/"]).output().unwrap();
+    let v = json_lines(&json.stdout);
+    assert_eq!(v.len(), 3, "two hits and a summary");
+    assert!(v[..2].iter().all(|h| h["path"] == "src/a.rs"));
+    let summary = v.last().unwrap();
+    assert_eq!(summary["type"], "summary");
+    // The first search may already have finished the (tiny) build.
+    assert!(summary["index_status"] == "building" || summary["index_status"] == "ready", "{}", summary);
+
+    // Once the background build lands, searches use the index.
+    e.wait_indexed_and_stop();
+    let json = e.scout().args(["search", "--json", "beta_handler"]).output().unwrap();
+    let v = json_lines(&json.stdout);
+    assert_eq!(v.last().unwrap()["index_status"], "ready");
+    assert_eq!(v.len(), 4);
+}
+
+#[test]
+fn symbol_query_without_index_says_building() {
+    let e = Env::new();
+    e.write("src/a.rs", "fn gamma() {}\n");
+    let out = e.scout().args(["sym", "gamma"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("still building"), "{}", String::from_utf8_lossy(&out.stderr));
+    e.wait_indexed_and_stop();
+}
+
+#[test]
+fn mcp_round_trip() {
+    use std::io::{BufRead, BufReader, Write};
+    let e = Env::new();
+    e.write("src/lib.rs", "pub fn delta_fn() {}\nfn caller() { delta_fn(); }\n");
+    let mut child = e.scout().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut call = |msg: serde_json::Value| -> serde_json::Value {
+        writeln!(stdin, "{}", msg).unwrap();
+        stdin.flush().unwrap();
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    };
+    let init = call(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}));
+    assert_eq!(init["result"]["serverInfo"]["name"], "scout");
+    let tools = call(serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
+    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["search", "find_symbol", "find_callers", "index_status", "reindex"]);
+
+    // No index yet: search answers from a scan and says the index is building.
+    let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "search", "arguments": {"query": "delta_fn"}}}));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(text.contains("src/lib.rs") && text.contains("1: pub fn delta_fn() {}"), "{}", text);
+    assert!(text.contains("index_status: building"), "{}", text);
+
+    // After the build, symbols work.
+    let t = Instant::now();
+    let text = loop {
+        let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "find_callers", "arguments": {"name": "delta_fn"}}}));
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("").to_string();
+        if text.contains("(in caller)") || t.elapsed() > Duration::from_secs(20) {
+            break text;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(text.contains("2: fn caller() { delta_fn(); }  (in caller)"), "{}", text);
+    drop(stdin);
+    let _ = child.wait();
+    e.wait_indexed_and_stop();
 }

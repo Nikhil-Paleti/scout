@@ -109,7 +109,15 @@ impl Index {
     }
 
     pub fn disk_bytes(&self) -> u64 {
-        self.segments.iter().map(|s| s.seg.byte_len() as u64).sum()
+        self.segments
+            .iter()
+            .map(|s| s.seg.byte_len() as u64 + s.syms.as_ref().map(|y| y.byte_len() as u64).unwrap_or(0))
+            .sum()
+    }
+
+    /// Whether every segment has its symbols (false if the index has none).
+    pub fn symbols_ready(&self) -> bool {
+        self.manifest.symbols && self.segments.iter().all(|s| s.syms.is_some())
     }
 }
 

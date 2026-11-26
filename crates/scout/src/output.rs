@@ -212,7 +212,9 @@ impl<W: Write> Printer<W> {
         w.write_all(b"\n")
     }
 
-    pub fn summary(&mut self, stats: &SearchStats) -> io::Result<()> {
+    /// `building` marks results that came from a scan because the index
+    /// doesn't exist yet.
+    pub fn summary(&mut self, stats: &SearchStats, building: bool) -> io::Result<()> {
         if self.format == Format::Json {
             let mut v = json!({
                 "type": "summary",
@@ -224,6 +226,7 @@ impl<W: Write> Printer<W> {
             if stats.symbols_incomplete {
                 v["symbols_incomplete"] = json!(true);
             }
+            v["index_status"] = json!(if building { "building" } else { "ready" });
             writeln!(self.out, "{}", v)?;
         }
         Ok(())

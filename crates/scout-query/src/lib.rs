@@ -298,6 +298,26 @@ pub fn search(
     rank(&mut cands, opts.near.as_deref());
     stats.candidate_time = t0.elapsed() - stats.plan_time;
 
+    verify(root, &cands, &compiled, opts, &pool, &mut stats, t0, false, emit);
+    stats.total_time = t0.elapsed();
+    Ok(stats)
+}
+
+
+/// Searches candidate files in rank order, a growing chunk at a time, and
+/// emits hits until `max_matches` or until `emit` says stop.
+#[allow(clippy::too_many_arguments)]
+fn verify(
+    root: &Path,
+    cands: &[(u32, String)],
+    compiled: &Compiled,
+    opts: &SearchOptions,
+    pool: &rayon::ThreadPool,
+    stats: &mut SearchStats,
+    t0: Instant,
+    read_whole: bool,
+    emit: &mut dyn FnMut(&Hit) -> bool,
+) {
     let stop = AtomicBool::new(false);
     let max = opts.max_matches.max(1);
     let mut start = 0usize;
@@ -319,7 +339,16 @@ pub fn search(
                         max_line: opts.max_line_bytes,
                         limit: remaining,
                     };
-                    let _ = srch.search_path(&compiled.matcher, root.join(rel), &mut sink);
+                    if read_whole {
+                        // No index: apply the indexer's skip rules here.
+                        let Ok(data) = std::fs::read(root.join(rel)) else { return Vec::new() };
+                        if scout_index::filter::check_content(&data).is_some() {
+                            return Vec::new();
+                        }
+                        let _ = srch.search_slice(&compiled.matcher, &data, &mut sink);
+                    } else {
+                        let _ = srch.search_path(&compiled.matcher, root.join(rel), &mut sink);
+                    }
                     sink.hits
                 })
                 .collect()
@@ -352,6 +381,45 @@ pub fn search(
         start = end;
         chunk = (chunk * 2).min(1024);
     }
+}
+
+/// Answers a text query with no index, the way ripgrep would: walk the tree
+/// with the same ignore rules and skip rules the indexer uses, then search
+/// every file. Used while the first index builds in the background.
+/// `sym:` and `calls:` need the index and fail here.
+pub fn search_unindexed(
+    root: &Path,
+    query: &str,
+    opts: &SearchOptions,
+    emit: &mut dyn FnMut(&Hit) -> bool,
+) -> Result<SearchStats> {
+    let t0 = Instant::now();
+    let parsed = parse(query, opts)?;
+    if parsed.sym.is_some() {
+        anyhow::bail!("sym: and calls: need the index, which is still building; try again shortly, or search the text");
+    }
+    let compiled = compile_parsed(&parsed, opts)?;
+    let mut stats = SearchStats { plan: "scan (no index yet)".to_string(), plan_time: t0.elapsed(), ..Default::default() };
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(opts.threads.max(1)).build()?;
+    let rules = scout_index::Rules::new(root, &[])?;
+    let skipped = std::sync::atomic::AtomicU64::new(0);
+    let paths = scout_index::build::walk(&rules, opts.threads.max(1), scout_index::filter::DEFAULT_MAX_FILE_SIZE, &skipped);
+    let mut cands: Vec<(u32, String)> = paths
+        .iter()
+        .filter_map(|p| {
+            let rel = p.to_string_lossy();
+            if compiled.path_ok(rel.as_bytes()) {
+                Some((0u32, rel.into_owned()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    stats.live_files = paths.len() as u64;
+    stats.candidates = cands.len();
+    rank(&mut cands, opts.near.as_deref());
+    stats.candidate_time = t0.elapsed() - stats.plan_time;
+    verify(root, &cands, &compiled, opts, &pool, &mut stats, t0, true, emit);
     stats.total_time = t0.elapsed();
     Ok(stats)
 }
