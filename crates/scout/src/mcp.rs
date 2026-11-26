@@ -35,7 +35,7 @@ fn tools() -> Value {
         {
             "name": "search",
             "title": "Search code",
-            "description": format!("Indexed regex search over the whole repository (tracked, untracked and hidden files; .gitignored files skipped). Much faster than grep on large repos. {} Results are path, line and the matching line, grouped by file and best first.", QUERY_HELP),
+            "description": format!("Indexed regex search over the whole repository (tracked, untracked and hidden files; .gitignored files skipped). Much faster than grep on large repos. {} Results are path, line and the matching line, grouped by file and best first. If the repository isn't indexed yet, this still answers by scanning files and starts indexing in the background.", QUERY_HELP),
             "inputSchema": {
                 "type": "object",
                 "properties": {"query": {"type": "string", "description": QUERY_HELP}, "limit": limit, "context": context},
@@ -86,7 +86,7 @@ fn tools() -> Value {
         {
             "name": "reindex",
             "title": "Update the index",
-            "description": "Brings the index up to date. Builds it if there is none (can take minutes on a large repo), otherwise re-checks changed files. full=true rebuilds from scratch.",
+            "description": "Brings the index up to date. Starts building it in the background if there is none (search works meanwhile), otherwise re-checks changed files. full=true rebuilds from scratch.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"full": {"type": "boolean", "description": "Rebuild from scratch."}}
@@ -234,12 +234,16 @@ impl Server {
     }
 
     fn reindex(&self, full: bool) -> Result<String> {
-        if !Manifest::exists(&self.dir) || (full && !daemon::is_running(&self.dir)) {
+        if !Manifest::exists(&self.dir) {
+            crate::start_background_build(&self.root, &self.dir);
+            return Ok("Indexing started in the background. search answers meanwhile by scanning files; index_status shows progress, and find_symbol/find_callers work once it's done.".into());
+        }
+        if full && !daemon::is_running(&self.dir) {
             let opts = BuildOptions { commit: repo::head(&self.root), ..Default::default() };
             let st = build::build_full(&self.root, &self.dir, &opts)?;
             self.ensure_daemon();
             return Ok(format!(
-                "Indexed {} files in {:.1?}. Text search is ready; symbols (find_symbol, find_callers) are being indexed in the background.",
+                "Rebuilt the index: {} files in {:.1?}. Symbols (find_symbol, find_callers) are being indexed in the background.",
                 st.files_indexed, st.total_time
             ));
         }

@@ -1,19 +1,25 @@
 -- Headless smoke test of the Neovim plugin without snacks (quickfix path).
--- Run: SCOUT_TEST_REPO=/path/to/repo nvim --headless -u NONE -l tests/nvim/smoke.lua
--- (Neovim 0.9: nvim --headless -u NONE -c "luafile tests/nvim/smoke.lua")
+-- Run from the repo after `cargo build --release`:
+--   nvim --headless -u NONE -c "luafile tests/nvim/smoke.lua"
+-- It makes a throwaway repo and index cache under a temp dir.
 local here = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h")
 vim.opt.rtp:prepend(here)
 vim.cmd("runtime plugin/scout.lua")
 
-local repo = assert(os.getenv("SCOUT_TEST_REPO"), "set SCOUT_TEST_REPO")
+local tmp = vim.fn.tempname()
+local repo = tmp .. "/repo"
+vim.fn.mkdir(repo .. "/src", "p")
+vim.fn.writefile({ "int hello_world(void) { return 1; }", "int main() { return hello_world(); }" }, repo .. "/src/a.c")
+vim.fn.system({ "git", "init", "-q", repo })
+vim.env.SCOUT_CACHE_DIR = tmp .. "/cache"
 vim.cmd("cd " .. repo)
 local failures = 0
 local function check(cond, msg)
   if cond then
-    print("ok   " .. msg)
+    io.stdout:write("ok   " .. msg .. "\n")
   else
     failures = failures + 1
-    print("FAIL " .. msg)
+    io.stdout:write("FAIL " .. msg .. "\n")
   end
 end
 local function wait(ms, pred)
@@ -23,6 +29,8 @@ end
 require("scout").setup({ route_lazyvim_keys = false })
 local util = require("scout.util")
 check(util.bin() ~= nil, "binary found: " .. tostring(util.bin()))
+vim.fn.system({ util.bin(), "build", "--quiet" })
+check(vim.v.shell_error == 0, "scout build")
 
 -- :Scout fills the quickfix list.
 vim.cmd("Scout hello_world")
@@ -68,5 +76,6 @@ check(ok, "checkhealth scout runs " .. tostring(err or ""))
 local health = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
 check(health:find("binary:") ~= nil, "health reports the binary")
 
+vim.fn.system({ util.bin(), "stop" })
 print(failures == 0 and "ALL PASSED" or (failures .. " FAILED"))
 vim.cmd((failures == 0 and "qa!" or "cq!"))

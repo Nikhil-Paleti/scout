@@ -203,6 +203,7 @@ pub(crate) fn search(
     let mut start = 0;
     let mut chunk = 64;
     let mut stop = false;
+    let mut matched_files: std::collections::HashSet<String> = Default::default();
     while start < found.len() && !stop {
         let end = (start + chunk).min(found.len());
         let mut files: Vec<&str> = found[start..end].iter().map(|f| f.path.as_str()).collect();
@@ -237,6 +238,7 @@ pub(crate) fn search(
             };
             stats.first_hit.get_or_insert_with(|| t0.elapsed());
             stats.matches += 1;
+            matched_files.insert(f.path.clone());
             if !emit(&hit) {
                 stop = true;
                 break;
@@ -245,7 +247,7 @@ pub(crate) fn search(
         start = end;
         chunk = (chunk * 2).min(2048);
     }
-    stats.files_matched = stats.files_searched;
+    stats.files_matched = matched_files.len();
     stats.total_time = t0.elapsed();
     Ok(stats)
 }
