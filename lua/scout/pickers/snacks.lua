@@ -9,6 +9,32 @@ function M.available()
   return pcall(require, "snacks.picker")
 end
 
+-- Whether this snacks has ctx:opts() (newer releases). Walks metatables
+-- with rawget, since older releases warn on any unknown key.
+local function has_ctx_opts(ctx)
+  local t = ctx
+  for _ = 1, 10 do
+    local mt = getmetatable(t)
+    local idx = mt and mt.__index
+    if type(idx) ~= "table" then
+      return false
+    end
+    if type(rawget(idx, "opts")) == "function" then
+      return true
+    end
+    t = idx
+  end
+  return false
+end
+
+--- Process config for snacks' proc source, old and new API.
+local function proc_opts(opts, ctx, proc)
+  if has_ctx_opts(ctx) then
+    return ctx:opts(proc)
+  end
+  return { opts, proc }
+end
+
 local function finder(root, get_query, flags)
   return function(opts, ctx)
     local cfg = require("scout.config").options
@@ -65,10 +91,7 @@ local function finder(root, get_query, flags)
         end
       end,
     }
-    -- snacks merges picker options into the process config with ctx:opts();
-    -- older releases took a list of tables instead.
-    local cfg_proc = ctx.opts and ctx:opts(proc) or { opts, proc }
-    return require("snacks.picker.source.proc").proc(cfg_proc, ctx)
+    return require("snacks.picker.source.proc").proc(proc_opts(opts, ctx, proc), ctx)
   end
 end
 
@@ -124,8 +147,7 @@ function M.files(opts)
           item.file = item.text
         end,
       }
-      local cfg_proc = ctx.opts and ctx:opts(proc) or { popts, proc }
-      return require("snacks.picker.source.proc").proc(cfg_proc, ctx)
+      return require("snacks.picker.source.proc").proc(proc_opts(popts, ctx, proc), ctx)
     end,
   })
 end
