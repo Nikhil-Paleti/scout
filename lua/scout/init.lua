@@ -241,6 +241,129 @@ local function route_explorer_buf(buf)
   end, { buffer = buf, desc = "Search folder (scout when indexed)", silent = true, nowait = true })
 end
 
+--- Runs a mapping found with maparg: its callback, or its keys typed now.
+local function run_map(m)
+  if m.callback then
+    return m.callback()
+  end
+  local keys = vim.api.nvim_replace_termcodes(m.rhs or "", true, true, true)
+  vim.api.nvim_feedkeys(keys, (m.noremap == 1 and "n" or "m") .. "x", false)
+end
+
+local function open_explorer()
+  local Snacks = require("snacks")
+  local key = config.options.explorer_key
+  local m = key and vim.fn.maparg(key, "n", false, true)
+  local function get()
+    return Snacks.picker.get({ source = "explorer" })[1]
+  end
+  if m and m.lhs then
+    -- Your own explorer key, so it opens as you set it up (e.g. a popup).
+    -- snacks lists a picker only once it shows, so wait for that.
+    pcall(run_map, m)
+    vim.wait(1000, function()
+      return get() ~= nil
+    end, 10)
+  end
+  local p = get() or Snacks.explorer.open()
+  -- Let it list its folder first, or the reveal races its first load.
+  vim.wait(2000, function()
+    return p.closed or (not p:is_active() and #p:items() > 0)
+  end, 10)
+  return get() or p
+end
+
+--- Shows `path` (a folder, absolute) in the snacks explorer: opens the
+--- explorer if needed, expands the folder and puts the cursor on it.
+--- Without snacks it opens the folder with :edit.
+function M.reveal(path)
+  local ok, Snacks = pcall(require, "snacks")
+  if not (ok and Snacks.explorer and Snacks.picker) then
+    return vim.cmd.edit(vim.fn.fnameescape(path))
+  end
+  local explorer = Snacks.picker.get({ source = "explorer" })[1] or open_explorer()
+  if not explorer then
+    return vim.cmd.edit(vim.fn.fnameescape(path))
+  end
+  if Snacks.explorer.reveal then
+    Snacks.explorer.reveal({ file = path })
+  else
+    -- Older snacks: no reveal(); open the folder and move to it.
+    local Tree = require("snacks.explorer.tree")
+    Tree:open(path)
+    require("snacks.explorer.actions").update(explorer, { target = path, refresh = true })
+  end
+  -- A freshly opened explorer can put its cursor back on top after its
+  -- first load; once the folder is listed, move to it again.
+  local Actions = require("snacks.explorer.actions")
+  vim.wait(2000, function()
+    if explorer.closed then
+      return true
+    end
+    local shown = explorer.list and explorer.list.win and explorer.list.win:valid()
+    return shown and not explorer:is_active() and Actions.reveal(explorer, path)
+  end, 10)
+  if explorer.focus then
+    explorer:focus("list")
+  elseif explorer.list and explorer.list.win then
+    explorer.list.win:focus()
+  end
+  return explorer
+end
+
+--- Find a folder by name and show it in the explorer. From inside the
+--- explorer it searches the repo the explorer is showing.
+function M.dirs(opts)
+  opts = opts or {}
+  local root = opts.root
+  if not root then
+    local ok = pcall(require, "snacks")
+    local p = ok and explorer_for(vim.api.nvim_get_current_buf())
+    local cwd = p and p:cwd()
+    root = (cwd and indexed_root(cwd)) or util.root()
+  end
+  local confirm = opts.confirm or M.reveal
+  local p = snacks()
+  if p then
+    return p.dirs({ root = root, search = opts.search, confirm = confirm })
+  end
+  local cmd = require("scout.search").files_cmd(opts.search, { root = root, dirs = true })
+  if not cmd then
+    vim.notify("scout: binary not found", vim.log.levels.ERROR)
+    return
+  end
+  util.run(cmd, {}, function(code, out, err)
+    if code == 2 then
+      vim.notify("scout: " .. vim.trim(err), vim.log.levels.ERROR)
+      return
+    end
+    local dirs = vim.split(out, "\n", { trimempty = true })
+    if #dirs == 0 then
+      vim.notify("scout: no folders match " .. (opts.search or ""))
+      return
+    end
+    vim.ui.select(dirs, { prompt = "Scout folders" }, function(choice)
+      if choice then
+        confirm(root .. "/" .. choice)
+      end
+    end)
+  end)
+end
+
+local function map_dirs_key()
+  local key = config.options.dirs_key
+  if not key or key == "" then
+    return
+  end
+  local m = vim.fn.maparg(key, "n", false, true)
+  if m and m.lhs and m.desc ~= "Find folder (scout)" then
+    return -- Something else uses it; leave it alone.
+  end
+  vim.keymap.set("n", key, function()
+    M.dirs()
+  end, { desc = "Find folder (scout)", silent = true })
+end
+
 local function route_explorer()
   vim.api.nvim_create_autocmd("FileType", {
     group = vim.api.nvim_create_augroup("scout_explorer", { clear = true }),
@@ -314,6 +437,7 @@ function M.setup(opts)
     route_keys()
     route_explorer()
   end
+  map_dirs_key()
   daemon.indexed(util.root())
   -- Loaded after startup (lazy.nvim's VeryLazy): VimEnter has passed.
   if config.options.index_on_start and vim.v.vim_did_enter == 1 then

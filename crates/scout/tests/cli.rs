@@ -595,6 +595,7 @@ fn mcp_round_trip() {
             "find_symbol",
             "find_callers",
             "find_files",
+            "find_dirs",
             "index_status",
             "reindex"
         ]
@@ -635,6 +636,15 @@ fn mcp_round_trip() {
         .unwrap()
         .to_string();
     assert!(text.starts_with("src/lib.rs\n"), "{}", text);
+    let r = call(
+        serde_json::json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "find_dirs", "arguments": {"query": "sr"}}}),
+    );
+    let text = r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(text, "src\n\n1 folder.", "{}", text);
 
     // After the build, symbols work.
     let t = Instant::now();
@@ -660,4 +670,41 @@ fn mcp_round_trip() {
     drop(stdin);
     let _ = child.wait();
     e.wait_indexed_and_stop();
+}
+
+#[test]
+fn dirs_finds_deep_folders_by_loose_words() {
+    let e = Env::new();
+    e.write("a/b/c/d/e/f/g/h/nvakbva/main.c", "int main;\n");
+    e.write("a/b/c/d/e/f/g/h/nvakbva/sub/util.c", "int util;\n");
+    e.write("a/b/c/d/e/f/g/h/other/x.c", "int x;\n");
+    e.write("top.c", "int top;\n");
+    assert!(e
+        .scout()
+        .args(["build", "--quiet"])
+        .status()
+        .unwrap()
+        .success());
+    let out = e.scout().args(["dirs", "a", "h", "bva"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines,
+        ["a/b/c/d/e/f/g/h/nvakbva", "a/b/c/d/e/f/g/h/nvakbva/sub"]
+    );
+    // `folders` is the same command; --json says type dir.
+    let out = e
+        .scout()
+        .args(["folders", "--json", "-m", "1", "nvak"])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["type"], "dir");
+    assert_eq!(v["path"], "a/b/c/d/e/f/g/h/nvakbva");
+    // No query: every folder, sorted; none matching exits 1.
+    let out = e.scout().arg("dirs").output().unwrap();
+    assert_eq!(String::from_utf8(out.stdout).unwrap().lines().count(), 11);
+    let out = e.scout().args(["dirs", "zzzq"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
 }

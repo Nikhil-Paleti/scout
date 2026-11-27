@@ -12,6 +12,14 @@ Queries work the same in `scout`, `:ScoutLive` and the MCP `search` tool. Every 
 | `lang:python file:test` | Python files with test in the path |
 | `scout files trnr` | trainer.py, trainer_test.py by fuzzy name (`:ScoutFiles`) |
 
+## Find a folder
+
+| Query | Finds |
+|---|---|
+| `scout dirs lidar trk` | perception/lidar/fusion/tracker from loose words (`<leader>fd`) |
+| `scout dirs kern` | kernels |
+| `scout dirs fusion -tracker` | perception/lidar/fusion, not the folder under it |
+
 ## Find a definition
 
 | Query | Finds |

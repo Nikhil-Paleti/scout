@@ -31,6 +31,7 @@ USAGE:
   scout refs NAME [FILTERS]           whole-word uses, same as `scout 'refs:NAME'`
   scout build   [--root DIR] [--exclude GLOB]... [--threads N] [--mem-mb N] [--no-nice] [--no-symbols] [--quiet]
   scout files   [--root DIR] [--json] [--max N] [--near PATH] [QUERY]   file names: fuzzy words, or a regex
+  scout dirs    [--root DIR] [--json] [--max N] [--near PATH] [QUERY]   folders, matched the same way (also `folders`)
   scout serve   [--root DIR] [--foreground] [--exclude GLOB]... [--idle-secs N]
   scout notify  [--root DIR] [--start] PATH...
   scout reconcile [--root DIR] [--full]
@@ -97,7 +98,8 @@ fn main() -> ExitCode {
         "sym" => cmd_search(args, "sym:"),
         "calls" | "callers" => cmd_search(args, "calls:"),
         "refs" => cmd_search(args, "refs:"),
-        "files" => cmd_files(args),
+        "files" => cmd_files(args, false),
+        "dirs" | "folders" => cmd_files(args, true),
         "serve" => cmd_serve(args),
         "notify" => cmd_notify(args),
         "reconcile" => cmd_reconcile(args),
@@ -402,7 +404,9 @@ fn cmd_mcp(mut a: Args) -> Result<u8> {
     Ok(0)
 }
 
-fn cmd_files(mut a: Args) -> Result<u8> {
+/// `scout files`, or `scout dirs` when `dirs`: the folders that hold
+/// indexed files, matched by the same fuzzy/regex rules.
+fn cmd_files(mut a: Args, dirs: bool) -> Result<u8> {
     let (root, dir) = root_and_dir(&mut a)?;
     let json_out = a.flag(&["--json"]);
     let max: Option<usize> = a.parsed(&["--max-count", "--max", "-m"])?;
@@ -418,6 +422,12 @@ fn cmd_files(mut a: Args) -> Result<u8> {
         start_background_build(&root, &dir);
         scout_query::walk(&root, SearchOptions::default().threads)?
     };
+    let paths = if dirs {
+        scout_query::files::dirs(&paths)
+    } else {
+        paths
+    };
+    let kind = if dirs { "dir" } else { "file" };
     let limit = max.unwrap_or(if query.trim().is_empty() {
         usize::MAX
     } else {
@@ -432,7 +442,7 @@ fn cmd_files(mut a: Args) -> Result<u8> {
             writeln!(
                 out,
                 "{}",
-                serde_json::json!({"type": "file", "path": m.path, "score": m.score, "positions": m.positions})
+                serde_json::json!({"type": kind, "path": m.path, "score": m.score, "positions": m.positions})
             )?;
         } else {
             out.write_all(m.path.as_bytes())?;

@@ -95,6 +95,20 @@ fn tools() -> Value {
             "annotations": {"readOnlyHint": true}
         },
         {
+            "name": "find_dirs",
+            "title": "Find folders",
+            "description": "Finds folders by name, with the same rules as find_files: fuzzy words (`a h bva` matches a/b/c/d/e/f/g/h/nvakbva), or a regex over the path. Hits in the folder's own name rank first. Use it to locate a package or module directory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Fuzzy words or a path regex."},
+                    "limit": {"type": "integer", "description": "Maximum results (default 50, at most 500).", "minimum": 1}
+                },
+                "required": ["query"]
+            },
+            "annotations": {"readOnlyHint": true}
+        },
+        {
             "name": "index_status",
             "title": "Index status",
             "description": "Shows whether the repository is indexed, how many files, whether symbols are ready, and whether the background updater is running.",
@@ -277,7 +291,7 @@ impl Server {
         out
     }
 
-    fn find_files(&self, query: &str, limit: usize) -> Result<String> {
+    fn find_files(&self, query: &str, limit: usize, dirs: bool) -> Result<String> {
         let building = !Manifest::exists(&self.dir);
         let paths: Vec<String> = if building {
             crate::start_background_build(&self.root, &self.dir);
@@ -290,9 +304,19 @@ impl Server {
                 .map(|f| String::from_utf8_lossy(f.path).into_owned())
                 .collect()
         };
+        let paths = if dirs {
+            scout_query::files::dirs(&paths)
+        } else {
+            paths
+        };
+        let (one, many) = if dirs {
+            ("folder", "folders")
+        } else {
+            ("file", "files")
+        };
         let found = scout_query::files::find(&paths, query, None, limit + 1)?;
         if found.is_empty() {
-            return Ok("No files.".into());
+            return Ok(format!("No {}.", many));
         }
         let more = found.len() > limit;
         let mut out: String = found
@@ -301,9 +325,13 @@ impl Server {
             .map(|m| format!("{}\n", m.path))
             .collect();
         out.push_str(&format!(
-            "\n{} file{}{}.",
+            "\n{} {}{}.",
             found.len().min(limit),
-            if found.len() == 1 { "" } else { "s" },
+            if found.len().min(limit) == 1 {
+                one
+            } else {
+                many
+            },
             if more {
                 "; more exist, raise limit or add words"
             } else {
@@ -372,11 +400,11 @@ impl Server {
                 }
                 self.run_query(q.trim(), limit, context)
             }
-            "find_files" => {
+            "find_files" | "find_dirs" => {
                 let Some(q) = arg_str(args, "query") else {
                     bail!("query is required")
                 };
-                self.find_files(q, limit)
+                self.find_files(q, limit, name == "find_dirs")
             }
             "index_status" => {
                 let mut v = status_json(&self.root, &self.dir);

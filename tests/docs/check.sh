@@ -29,6 +29,7 @@ while IFS= read -r q; do
   n=$((n + 1))
   case "$q" in
     "scout files "*) "$bin" files ${q#scout files } > /dev/null 2>&1 ;;
+    "scout dirs "*) "$bin" dirs ${q#scout dirs } > /dev/null 2>&1 ;;
     *) "$bin" -- "$q" > /dev/null 2>&1 ;;
   esac
   e=$?

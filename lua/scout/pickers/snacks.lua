@@ -220,6 +220,73 @@ function M.files(opts)
   })
 end
 
+--- Folders that hold the changed, recent and nearby files, nearest first.
+local function start_dirs(root, current)
+  local seen, out = {}, {}
+  for _, f in ipairs(start.list(root, { current = current })) do
+    local d = vim.fs.dirname(f[1])
+    if d and d ~= "." and d ~= "" and not seen[d] then
+      seen[d] = true
+      out[#out + 1] = d
+    end
+  end
+  return out, seen
+end
+
+--- Folders: every folder holding an indexed file, from `scout dirs`,
+--- fuzzy matched by snacks as you type (`a h bva` finds
+--- a/b/c/d/e/f/g/h/nvakbva). Picking one calls opts.confirm(abs_path).
+function M.dirs(opts)
+  opts = opts or {}
+  local root = opts.root or util.root()
+  local cmd = search.files_cmd(nil, { root = root, dirs = true })
+  if not cmd then
+    return
+  end
+  local current = near(root)
+  return require("snacks").picker.pick({
+    source = "scout_dirs",
+    title = "Scout folders",
+    format = "file",
+    pattern = opts.search,
+    finder = function(popts, ctx)
+      local first, seen = start_dirs(root, current)
+      local function item(path)
+        return { file = path, text = path, dir = true, cwd = root }
+      end
+      local proc = {
+        cmd = cmd[1],
+        args = vim.list_slice(cmd, 2),
+        cwd = root,
+        notify = false,
+        transform = function(it)
+          if seen[it.text] then
+            return false
+          end
+          it.cwd = root
+          it.file = it.text
+          it.dir = true
+        end,
+      }
+      local all = require("snacks.picker.source.proc").proc(proc_opts(popts, ctx, proc), ctx)
+      return function(cb)
+        for _, d in ipairs(first) do
+          cb(item(d))
+        end
+        all(cb)
+      end
+    end,
+    confirm = function(picker, it)
+      picker:close()
+      if it and opts.confirm then
+        vim.schedule(function()
+          opts.confirm(root .. "/" .. it.file)
+        end)
+      end
+    end,
+  })
+end
+
 --- One query, results filtered by fuzzy matching as you type.
 function M.query(query, opts)
   opts = opts or {}

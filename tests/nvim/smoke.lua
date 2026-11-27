@@ -60,6 +60,18 @@ end
 vim.cmd("ScoutFiles sac")
 check(wait(5000, function() return picked ~= nil end), ":ScoutFiles lists matches")
 check(picked and #picked == 1 and picked[1] == "src/a.c", "fuzzy file match src/a.c")
+-- :ScoutFolders without snacks: pick a folder, it opens with :edit.
+picked = nil
+vim.ui.select = function(items, _, cb)
+  picked = items
+  cb(items[1])
+end
+vim.cmd("ScoutFolders sr")
+check(wait(5000, function() return picked ~= nil end), ":ScoutFolders lists matches")
+check(picked and picked[1] == "src", "folder match src: " .. vim.inspect(picked))
+check(wait(2000, function() return vim.api.nvim_buf_get_name(0):match("/src$") ~= nil end), "picked folder is opened")
+check(vim.fn.maparg("<leader>fd", "n", false, true).desc == "Find folder (scout)", "<leader>fd mapped without snacks")
+vim.cmd("enew")
 vim.ui.select = orig_select
 check(require("scout.search").dir_filter("src/x y.d") == [[file:^src/x\ y\.d/ ]], "dir filter escapes")
 

@@ -3,6 +3,9 @@
 //! style), scored for consecutive letters, word starts and hits in the base
 //! name. A `-term` (or `-file:term`) word drops paths that match `term` as a
 //! case-insensitive regex, as it does in a code search.
+//!
+//! `scout dirs QUERY` runs the same matcher over folders: every parent
+//! directory of an indexed path, so it needs no index of its own.
 
 use anyhow::{Context, Result};
 use grep_matcher::Matcher;
@@ -142,7 +145,6 @@ pub fn fuzzy(path: &str, words: &[&str]) -> Option<(i64, Vec<usize>)> {
     Some((total, all))
 }
 
-/// Matches `paths` against `query`, best first, at most `limit`.
 /// Splits `-term` words off a query: the rest of the query, and a matcher
 /// for paths to drop.
 fn exclusions(query: &str) -> Result<(String, Option<grep_regex::RegexMatcher>)> {
@@ -194,6 +196,26 @@ fn regex_escape(t: &str) -> String {
     out
 }
 
+/// Every folder that holds an indexed path, relative to the root, sorted.
+/// The root itself is left out. Stops walking up once a parent is known,
+/// so it is about one hash lookup per file.
+pub fn dirs(paths: &[String]) -> Vec<String> {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for p in paths {
+        let mut cur = p.as_str();
+        while let Some(i) = cur.rfind('/') {
+            cur = &cur[..i];
+            if cur.is_empty() || !seen.insert(cur) {
+                break;
+            }
+        }
+    }
+    let mut out: Vec<String> = seen.into_iter().map(str::to_string).collect();
+    out.sort_unstable();
+    out
+}
+
+/// Matches `paths` against `query`, best first, at most `limit`.
 pub fn find(
     paths: &[String],
     query: &str,
@@ -322,5 +344,60 @@ mod tests {
         assert_eq!(top(&paths, "main -[x"), top(&paths, "main"));
         let m = fuzzy("src/main.rs", &["mrs"]).unwrap();
         assert_eq!(m.1, vec![4, 9, 10]);
+    }
+
+    #[test]
+    fn dirs_lists_every_parent_once() {
+        let paths: Vec<String> = [
+            "README.md",
+            "src/main.rs",
+            "src/widget/draw.c",
+            "src/widget/deep/x.c",
+            "docs/a.md",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            dirs(&paths),
+            vec!["docs", "src", "src/widget", "src/widget/deep"]
+        );
+        assert!(dirs(&["top.txt".to_string()]).is_empty());
+    }
+
+    #[test]
+    fn loose_words_find_a_deep_folder() {
+        let paths: Vec<String> = [
+            "a/b/c/d/e/f/g/h/nvakbva/main.c",
+            "a/b/c/d/e/f/g/h/nvakbva/sub/util.c",
+            "a/b/c/d/e/f/g/h/other/x.c",
+            "a/b/c/d/e/f/g/h/x.c",
+            "a/h/bvx/y.c",
+            "b/v/a/z.c",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let d = dirs(&paths);
+        let hits: Vec<String> = find(&d, "a h bva", None, 10)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.path)
+            .collect();
+        assert_eq!(hits[0], "a/b/c/d/e/f/g/h/nvakbva");
+        assert!(hits.contains(&"a/b/c/d/e/f/g/h/nvakbva/sub".to_string()));
+        assert!(!hits.contains(&"a/b/c/d/e/f/g/h/other".to_string()));
+        // The last segment counts most: `nvak` finds the folder itself first.
+        assert_eq!(
+            find(&d, "nvak", None, 10).unwrap()[0].path,
+            "a/b/c/d/e/f/g/h/nvakbva"
+        );
+        // A regex and an exclusion work as they do for files.
+        let r = find(&d, r"/sub$", None, 10).unwrap();
+        assert_eq!(r.len(), 1);
+        assert!(find(&d, "a h bva -sub", None, 10)
+            .unwrap()
+            .iter()
+            .all(|m| !m.path.ends_with("/sub")));
     }
 }

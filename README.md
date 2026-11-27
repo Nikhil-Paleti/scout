@@ -15,6 +15,7 @@ cargo install --path scout/crates/scout
 ```sh
 scout '(TODO OR FIXME) lang:python'   # search, Google Code Search syntax
 scout files trnr                      # find files by name
+scout dirs a h bva                    # find a folder: a/b/c/d/e/f/g/h/nvakbva
 scout sym Trainer                     # definitions
 ```
 

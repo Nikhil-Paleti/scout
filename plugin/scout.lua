@@ -21,6 +21,10 @@ cmd("ScoutFiles", function(a)
   scout().files({ search = a.args ~= "" and a.args or nil })
 end, { nargs = "*", desc = "Scout: find files by name" })
 
+cmd("ScoutFolders", function(a)
+  scout().dirs({ search = a.args ~= "" and a.args or nil })
+end, { nargs = "*", desc = "Scout: find a folder by name and show it in the explorer" })
+
 cmd("ScoutDir", function(a)
   scout().live_dir({ search = a.args ~= "" and a.args or nil })
 end, { nargs = "*", desc = "Scout: live search in the current file's directory" })

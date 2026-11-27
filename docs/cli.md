@@ -6,6 +6,7 @@ Plain terms need no quotes: `scout calls launch -file:test`. Quote anything the 
 |---|---|
 | `scout QUERY` | search ([syntax](syntax.md)) |
 | `scout files [QUERY]` | file names: fuzzy words, or a path regex; `-term` drops matching paths |
+| `scout dirs [QUERY]` | folders, matched the same way; `a h bva` finds a/b/c/d/e/f/g/h/nvakbva (also `scout folders`) |
 | `scout sym NAME [FILTERS]` | definitions, same as `scout 'sym:NAME'` |
 | `scout calls NAME [FILTERS]` | call sites, same as `scout 'calls:NAME'` |
 | `scout refs NAME [FILTERS]` | whole-word uses |

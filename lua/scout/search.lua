@@ -44,13 +44,14 @@ function M.decode(line)
 end
 
 --- `scout files` command: every indexed path, or fuzzy/regex matches.
+--- opts.dirs: `scout dirs`, the folders that hold indexed files.
 function M.files_cmd(query, opts)
   opts = opts or {}
   local bin = util.bin()
   if not bin then
     return nil
   end
-  local cmd = { bin, "files", "--root", opts.root or util.root() }
+  local cmd = { bin, opts.dirs and "dirs" or "files", "--root", opts.root or util.root() }
   if opts.near and opts.near ~= "" then
     vim.list_extend(cmd, { "--near", opts.near })
   end

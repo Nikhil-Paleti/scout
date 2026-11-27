@@ -8,6 +8,13 @@ M.defaults = {
   -- when the project has an index. Without an index they stay on rg. Also
   -- <leader>/ in the snacks explorer: it searches the highlighted folder.
   route_lazyvim_keys = true,
+  -- Find folders by name (:ScoutFolders) and open the pick in the snacks
+  -- explorer. Mapped only when nothing else uses the key; false to skip.
+  dirs_key = "<leader>fd",
+  -- The key that opens your explorer (LazyVim: <leader>e). When no explorer
+  -- is open, a folder pick presses it first, so the explorer opens the way
+  -- you set it up (sidebar or popup), then shows the folder.
+  explorer_key = "<leader>e",
   -- Show `sym:  file:  lang:  "exact"  -term` in the empty search prompt.
   syntax_hint = true,
   -- Live search waits for this many characters.
