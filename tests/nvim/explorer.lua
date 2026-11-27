@@ -18,6 +18,10 @@ local function new_repo(path)
   return uv.fs_realpath(path)
 end
 local repo = new_repo(tmp .. "/repo")
+-- A submodule: its own .git file, but searched through the outer index.
+vim.fn.mkdir(repo .. "/vendor/lib/src", "p")
+vim.fn.writefile({ "int lib_fn(void);" }, repo .. "/vendor/lib/src/lib.c")
+vim.fn.writefile({ "gitdir: ../../.git/modules/vendor/lib" }, repo .. "/vendor/lib/.git")
 local bare = new_repo(tmp .. "/bare") -- never indexed
 vim.env.SCOUT_CACHE_DIR = tmp .. "/cache"
 
@@ -110,6 +114,13 @@ p, map = explorer_on(repo, "README.md")
 map.callback()
 s = opened("scout")
 check(s and s.title == "Scout", "root file searches the repo: " .. tostring(s and s.title))
+close_all()
+
+-- A folder in a submodule uses the outer repo's index.
+p, map = explorer_on(repo, "vendor/lib/src")
+map.callback()
+s = opened("scout")
+check(s and s.title == "Scout in vendor/lib/src/", "submodule folder uses the outer index: " .. tostring(s and s.title))
 close_all()
 
 -- No index: the explorer's own grep in that folder.

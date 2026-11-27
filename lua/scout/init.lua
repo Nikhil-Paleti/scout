@@ -190,6 +190,17 @@ local function rel_to(root, dir)
   end
 end
 
+--- The nearest indexed git root holding `dir`. A submodule or nested repo
+--- has its own .git but is searched through the outer repo's index.
+local function indexed_root(dir)
+  local root = util.git_root(dir)
+  while root and not daemon.indexed(root) do
+    local parent = vim.fs.dirname(root)
+    root = parent ~= root and util.git_root(parent) or nil
+  end
+  return root
+end
+
 --- The snacks explorer whose list window shows `buf`.
 local function explorer_for(buf)
   for _, p in ipairs(require("snacks").picker.get({ source = "explorer" })) do
@@ -217,9 +228,9 @@ local function route_explorer_buf(buf)
     local p = explorer_for(buf)
     local item = p and p:current()
     local dir = item and require("snacks.picker.util").dir(item)
-    local root = dir and util.git_root(dir)
+    local root = dir and indexed_root(dir)
     local rel = root and rel_to(root, dir)
-    if rel and daemon.indexed(root) then
+    if rel then
       return M.live({ root = root, dir = rel ~= "" and rel or nil })
     end
     if orig.callback then
