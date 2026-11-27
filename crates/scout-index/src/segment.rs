@@ -41,7 +41,11 @@ pub struct FileMeta {
 
 impl FileMeta {
     pub fn from_metadata(md: &fs::Metadata, hash: u64) -> FileMeta {
-        FileMeta { size: md.len(), mtime_ns: mtime_ns(md), hash }
+        FileMeta {
+            size: md.len(),
+            mtime_ns: mtime_ns(md),
+            hash,
+        }
     }
 }
 
@@ -76,8 +80,8 @@ pub struct SegmentWriter {
 impl SegmentWriter {
     pub fn create(final_path: &Path) -> Result<SegmentWriter> {
         let tmp_path = final_path.with_extension("tmp");
-        let file = File::create(&tmp_path)
-            .with_context(|| format!("creating {}", tmp_path.display()))?;
+        let file =
+            File::create(&tmp_path).with_context(|| format!("creating {}", tmp_path.display()))?;
         let mut out = BufWriter::with_capacity(1 << 20, file);
         out.write_all(&[0u8; HEADER_LEN])?;
         Ok(SegmentWriter {
@@ -151,7 +155,8 @@ impl SegmentWriter {
         self.last_tri = Some(tri);
         self.buf.clear();
         varint::encode_postings(ids, &mut self.buf);
-        self.dict.push((tri, ids.len() as u32, self.pos - self.postings_off));
+        self.dict
+            .push((tri, ids.len() as u32, self.pos - self.postings_off));
         self.out.write_all(&self.buf)?;
         self.pos += self.buf.len() as u64;
         Ok(())
@@ -176,7 +181,13 @@ impl SegmentWriter {
         h.extend_from_slice(&0u32.to_le_bytes());
         h.extend_from_slice(&num_files.to_le_bytes());
         h.extend_from_slice(&(self.dict.len() as u32).to_le_bytes());
-        for v in [paths_off, pathidx_off, meta_off, dict_off, self.postings_off] {
+        for v in [
+            paths_off,
+            pathidx_off,
+            meta_off,
+            dict_off,
+            self.postings_off,
+        ] {
             h.extend_from_slice(&v.to_le_bytes());
         }
         debug_assert_eq!(h.len(), HEADER_LEN);
@@ -226,7 +237,11 @@ impl Segment {
         }
         let version = u32_at(&mmap, 8);
         if version != VERSION {
-            bail!("{}: unsupported segment version {}", path.display(), version);
+            bail!(
+                "{}: unsupported segment version {}",
+                path.display(),
+                version
+            );
         }
         let seg = Segment {
             num_files: u32_at(&mmap, 16),
@@ -290,7 +305,11 @@ impl Segment {
     #[inline]
     fn dict_entry(&self, i: u32) -> (u32, u32, u64) {
         let o = self.dict_off + DICT_LEN * i as usize;
-        (u32_at(&self.mmap, o), u32_at(&self.mmap, o + 4), u64_at(&self.mmap, o + 8))
+        (
+            u32_at(&self.mmap, o),
+            u32_at(&self.mmap, o + 4),
+            u64_at(&self.mmap, o + 8),
+        )
     }
 
     fn postings_slice(&self, i: u32) -> &[u8] {
@@ -322,7 +341,9 @@ impl Segment {
 
     /// Number of files containing `tri` (0 if absent).
     pub fn doc_count(&self, tri: u32) -> u32 {
-        self.find_trigram(tri).map(|i| self.dict_entry(i).1).unwrap_or(0)
+        self.find_trigram(tri)
+            .map(|i| self.dict_entry(i).1)
+            .unwrap_or(0)
     }
 
     /// Appends the file ids containing `tri` to `out`.
@@ -357,8 +378,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("seg-000001.idx");
         let mut w = SegmentWriter::create(&p).unwrap();
-        w.add_file(b"a.rs", FileMeta { size: 1, mtime_ns: 2, hash: 3 });
-        w.add_file(b"b/c.rs", FileMeta { size: 4, mtime_ns: -5, hash: 6 });
+        w.add_file(
+            b"a.rs",
+            FileMeta {
+                size: 1,
+                mtime_ns: 2,
+                hash: 3,
+            },
+        );
+        w.add_file(
+            b"b/c.rs",
+            FileMeta {
+                size: 4,
+                mtime_ns: -5,
+                hash: 6,
+            },
+        );
         w.add_postings(10, &[0, 1]).unwrap();
         w.add_postings(20, &[1]).unwrap();
         w.finish().unwrap();

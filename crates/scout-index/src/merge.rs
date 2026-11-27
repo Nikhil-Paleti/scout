@@ -41,8 +41,10 @@ pub fn merge(inputs: &[MergeInput], out: &Path) -> Result<u32> {
         live.dedup_by(|later, earlier| later.0 == earlier.0);
     }
 
-    let mut remap: Vec<Vec<u32>> =
-        inputs.iter().map(|i| vec![u32::MAX; i.seg.num_files() as usize]).collect();
+    let mut remap: Vec<Vec<u32>> = inputs
+        .iter()
+        .map(|i| vec![u32::MAX; i.seg.num_files() as usize])
+        .collect();
     let mut w = SegmentWriter::create(out)?;
     for (new_id, &(path, ii, id)) in live.iter().enumerate() {
         remap[ii as usize][id as usize] = new_id as u32;
@@ -51,7 +53,10 @@ pub fn merge(inputs: &[MergeInput], out: &Path) -> Result<u32> {
     let nfiles = live.len() as u32;
     drop(live);
 
-    let mut iters: Vec<_> = inputs.iter().map(|i| i.seg.dict_iter().peekable()).collect();
+    let mut iters: Vec<_> = inputs
+        .iter()
+        .map(|i| i.seg.dict_iter().peekable())
+        .collect();
     let mut acc: Vec<u32> = Vec::new();
     let mut tmp: Vec<u32> = Vec::new();
     loop {
@@ -72,7 +77,11 @@ pub fn merge(inputs: &[MergeInput], out: &Path) -> Result<u32> {
                     inputs[ii].seg.postings_at(di, &mut tmp);
                     let rm = &remap[ii];
                     let before = acc.len();
-                    acc.extend(tmp.iter().map(|&id| rm[id as usize]).filter(|&n| n != u32::MAX));
+                    acc.extend(
+                        tmp.iter()
+                            .map(|&id| rm[id as usize])
+                            .filter(|&n| n != u32::MAX),
+                    );
                     if acc.len() > before {
                         sources += 1;
                     }
@@ -89,7 +98,10 @@ pub fn merge(inputs: &[MergeInput], out: &Path) -> Result<u32> {
         let sym_inputs: Vec<SymMergeInput> = inputs
             .iter()
             .zip(&remap)
-            .map(|(i, r)| SymMergeInput { syms: i.syms.unwrap(), remap: r })
+            .map(|(i, r)| SymMergeInput {
+                syms: i.syms.unwrap(),
+                remap: r,
+            })
             .collect();
         merge_syms(&sym_inputs, &sym_path(out))?;
     }

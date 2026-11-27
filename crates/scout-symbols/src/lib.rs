@@ -183,8 +183,8 @@ impl Lang {
                     Lang::C
                 }
             }
-            b"cc" | b"cpp" | b"cxx" | b"c++" | b"hh" | b"hpp" | b"hxx" | b"h++" | b"ipp" | b"inl" | b"cu"
-            | b"cuh" | b"tcc" => Lang::Cpp,
+            b"cc" | b"cpp" | b"cxx" | b"c++" | b"hh" | b"hpp" | b"hxx" | b"h++" | b"ipp"
+            | b"inl" | b"cu" | b"cuh" | b"tcc" => Lang::Cpp,
             b"rs" => Lang::Rust,
             b"go" => Lang::Go,
             b"py" | b"pyi" => Lang::Python,
@@ -256,11 +256,16 @@ fn compiled(lang: Lang) -> &'static Compiled {
                 if *n == "call" {
                     Some(Kind::Call)
                 } else {
-                    n.strip_prefix("def.").map(|k| Kind::from_name(k).unwrap_or_else(|| panic!("kind {k}")))
+                    n.strip_prefix("def.")
+                        .map(|k| Kind::from_name(k).unwrap_or_else(|| panic!("kind {k}")))
                 }
             })
             .collect();
-        Compiled { query, name_idx, kinds }
+        Compiled {
+            query,
+            name_idx,
+            kinds,
+        }
     })
 }
 
@@ -283,14 +288,20 @@ fn parse(lang: Lang, data: &[u8]) -> Option<tree_sitter::Tree> {
         let mut p = p.borrow_mut();
         let parser = p[lang.idx()].get_or_insert_with(|| {
             let mut parser = Parser::new();
-            parser.set_language(&lang.language()).expect("grammar version");
+            parser
+                .set_language(&lang.language())
+                .expect("grammar version");
             parser
         });
         let start = Instant::now();
         let mut over = |_: &tree_sitter::ParseState| start.elapsed() > PARSE_BUDGET;
         let opts = tree_sitter::ParseOptions::new().progress_callback(&mut over);
         let len = data.len();
-        let r = parser.parse_with_options(&mut |i, _| if i < len { &data[i..] } else { &[] as &[u8] }, None, Some(opts));
+        let r = parser.parse_with_options(
+            &mut |i, _| if i < len { &data[i..] } else { &[] as &[u8] },
+            None,
+            Some(opts),
+        );
         parser.reset();
         r
     })
@@ -299,7 +310,9 @@ fn parse(lang: Lang, data: &[u8]) -> Option<tree_sitter::Tree> {
 /// Extracts definitions and calls from one file.
 pub fn extract(lang: Lang, data: &[u8]) -> Vec<Sym> {
     let c = compiled(lang);
-    let Some(tree) = parse(lang, data) else { return Vec::new() };
+    let Some(tree) = parse(lang, data) else {
+        return Vec::new();
+    };
 
     // (name_start, pattern, kind, outer byte range, name range, point)
     struct Raw {
@@ -325,7 +338,9 @@ pub fn extract(lang: Lang, data: &[u8]) -> Vec<Sym> {
                 outer = Some((k, cap.node));
             }
         }
-        let (Some(n), Some((kind, o))) = (name, outer) else { continue };
+        let (Some(n), Some((kind, o))) = (name, outer) else {
+            continue;
+        };
         let r = n.byte_range();
         if r.is_empty() || r.len() > MAX_NAME {
             continue;
@@ -342,7 +357,9 @@ pub fn extract(lang: Lang, data: &[u8]) -> Vec<Sym> {
         });
     }
     raws.sort_by_key(|r| (r.name_start, r.kind == Kind::Call, r.pattern));
-    raws.dedup_by(|b, a| a.name_start == b.name_start && (a.kind == Kind::Call) == (b.kind == Kind::Call));
+    raws.dedup_by(|b, a| {
+        a.name_start == b.name_start && (a.kind == Kind::Call) == (b.kind == Kind::Call)
+    });
 
     // Name each call's enclosing function: sweep by start position with a
     // stack of open callable definitions.
@@ -350,7 +367,11 @@ pub fn extract(lang: Lang, data: &[u8]) -> Vec<Sym> {
     for (i, r) in raws.iter().enumerate() {
         if r.kind.is_callable() || r.kind == Kind::Call {
             let is_call = r.kind == Kind::Call;
-            events.push((if is_call { r.name_start } else { r.outer.0 }, is_call as usize, i));
+            events.push((
+                if is_call { r.name_start } else { r.outer.0 },
+                is_call as usize,
+                i,
+            ));
         }
     }
     events.sort_unstable();
@@ -386,7 +407,8 @@ pub fn extract(lang: Lang, data: &[u8]) -> Vec<Sym> {
 }
 
 fn is_ident(b: &[u8]) -> bool {
-    b.iter().all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80)
+    b.iter()
+        .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80)
 }
 
 /// Convenience: detect the language and extract, or return nothing.

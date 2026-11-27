@@ -17,7 +17,9 @@ use crate::filters::{Parsed, SymMode};
 use crate::{has_upper, Case, Compiled, Hit, SearchOptions, SearchStats};
 
 fn is_ident(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
 fn parse_kinds(names: &[String]) -> Result<Vec<Kind>> {
@@ -91,7 +93,11 @@ pub(crate) fn search(
     if !index.manifest.symbols {
         bail!("this index has no symbols; rebuild it with `scout build` (or :ScoutIndex rebuild)");
     }
-    let mut stats = SearchStats { segments: index.segments.len(), live_files: index.live_count(), ..Default::default() };
+    let mut stats = SearchStats {
+        segments: index.segments.len(),
+        live_files: index.live_count(),
+        ..Default::default()
+    };
     let pending = index.segments.iter().filter(|s| s.syms.is_none()).count();
     if pending > 0 {
         stats.symbols_incomplete = true;
@@ -114,7 +120,11 @@ pub(crate) fn search(
     let name_re: Option<RegexMatcher> = if exact_only {
         None
     } else {
-        let pat = if literal { regex_syntax::escape(name) } else { name.to_string() };
+        let pat = if literal {
+            regex_syntax::escape(name)
+        } else {
+            name.to_string()
+        };
         Some(
             RegexMatcherBuilder::new()
                 .case_insensitive(insensitive)
@@ -123,7 +133,15 @@ pub(crate) fn search(
         )
     };
     let line_filter = compiled.has_line_filter();
-    stats.plan = format!("{} {}", if mode == SymMode::Defs { "sym" } else { "calls" }, name);
+    stats.plan = format!(
+        "{} {}",
+        if mode == SymMode::Defs {
+            "sym"
+        } else {
+            "calls"
+        },
+        name
+    );
     stats.plan_time = t0.elapsed();
 
     let want_calls = mode == SymMode::Calls;
@@ -135,7 +153,9 @@ pub(crate) fn search(
         .par_iter()
         .map(|s| {
             let mut out = Vec::new();
-            let Some(sf) = s.syms.as_ref() else { return out };
+            let Some(sf) = s.syms.as_ref() else {
+                return out;
+            };
             let visit = |nid: u32, out: &mut Vec<Found>| {
                 let n = String::from_utf8_lossy(sf.name(nid));
                 let class = if n == name {
@@ -166,7 +186,9 @@ pub(crate) fn search(
                         line: r.line,
                         kind: r.kind,
                         name: n.clone().into_owned(),
-                        container: r.container.map(|c| String::from_utf8_lossy(sf.name(c)).into_owned()),
+                        container: r
+                            .container
+                            .map(|c| String::from_utf8_lossy(sf.name(c)).into_owned()),
                     });
                     if out.len() >= cap {
                         break;
@@ -195,7 +217,12 @@ pub(crate) fn search(
         .collect();
     let mut found: Vec<Found> = per_seg.into_iter().flatten().collect();
     stats.candidates = found.len();
-    found.sort_by(|a, b| a.score.cmp(&b.score).then_with(|| a.path.cmp(&b.path)).then(a.line.cmp(&b.line)));
+    found.sort_by(|a, b| {
+        a.score
+            .cmp(&b.score)
+            .then_with(|| a.path.cmp(&b.path))
+            .then(a.line.cmp(&b.line))
+    });
     stats.candidate_time = t0.elapsed() - stats.plan_time;
 
     // Resolve line text in rank order, a chunk of files at a time.
@@ -209,12 +236,18 @@ pub(crate) fn search(
         let mut files: Vec<&str> = found[start..end].iter().map(|f| f.path.as_str()).collect();
         files.sort_unstable();
         files.dedup();
-        let texts: HashMap<&str, Option<Vec<u8>>> =
-            files.par_iter().map(|&p| (p, fs::read(root.join(p)).ok())).collect();
+        let texts: HashMap<&str, Option<Vec<u8>>> = files
+            .par_iter()
+            .map(|&p| (p, fs::read(root.join(p)).ok()))
+            .collect();
         stats.files_searched += texts.len();
         for f in &found[start..end] {
-            let Some(Some(data)) = texts.get(f.path.as_str()) else { continue };
-            let Some((line, text, col)) = locate(data, f.line, &f.name) else { continue };
+            let Some(Some(data)) = texts.get(f.path.as_str()) else {
+                continue;
+            };
+            let Some((line, text, col)) = locate(data, f.line, &f.name) else {
+                continue;
+            };
             if line_filter && !compiled.sym_line_ok(&text) {
                 continue;
             }
@@ -223,9 +256,16 @@ pub(crate) fn search(
                 stop = true;
                 break;
             }
-            let text_cut = if text.len() > opts.max_line_bytes { text[..opts.max_line_bytes].to_vec() } else { text };
-            let ranges =
-                if col + f.name.len() <= text_cut.len() { vec![(col, col + f.name.len())] } else { Vec::new() };
+            let text_cut = if text.len() > opts.max_line_bytes {
+                text[..opts.max_line_bytes].to_vec()
+            } else {
+                text
+            };
+            let ranges = if col + f.name.len() <= text_cut.len() {
+                vec![(col, col + f.name.len())]
+            } else {
+                Vec::new()
+            };
             let hit = Hit {
                 path: f.path.clone(),
                 line: line as u64,

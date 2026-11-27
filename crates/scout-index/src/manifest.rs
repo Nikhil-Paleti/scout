@@ -32,7 +32,14 @@ pub struct SegmentInfo {
 
 impl SegmentInfo {
     pub fn new(name: String, files: u32, kind: &str, syms: bool) -> SegmentInfo {
-        SegmentInfo { name, files, kind: kind.to_string(), del: None, deleted: 0, syms }
+        SegmentInfo {
+            name,
+            files,
+            kind: kind.to_string(),
+            del: None,
+            deleted: 0,
+            syms,
+        }
     }
 
     pub fn sym_name(&self) -> String {
@@ -91,10 +98,13 @@ impl Manifest {
     pub fn load(dir: &Path) -> Result<Manifest> {
         let p = Self::path(dir);
         let data = fs::read(&p).with_context(|| format!("reading {}", p.display()))?;
-        let m: Manifest = serde_json::from_slice(&data)
-            .with_context(|| format!("parsing {}", p.display()))?;
+        let m: Manifest =
+            serde_json::from_slice(&data).with_context(|| format!("parsing {}", p.display()))?;
         if m.format != FORMAT {
-            anyhow::bail!("index format {} is not supported; run `scout build`", m.format);
+            anyhow::bail!(
+                "index format {} is not supported; run `scout build`",
+                m.format
+            );
         }
         Ok(m)
     }
@@ -126,7 +136,10 @@ impl Manifest {
     }
 
     pub fn live_files(&self) -> u64 {
-        self.segments.iter().map(|s| (s.files - s.deleted) as u64).sum()
+        self.segments
+            .iter()
+            .map(|s| (s.files - s.deleted) as u64)
+            .sum()
     }
 }
 
@@ -148,17 +161,28 @@ pub fn cache_base() -> PathBuf {
             return PathBuf::from(d).join("scout");
         }
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"));
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
     home.join(".cache").join("scout")
 }
 
 /// Index directory for a canonical repo root: `<cache>/<xxh3 of root>`.
 pub fn index_dir_for(root: &Path) -> PathBuf {
     let h = xxhash_rust::xxh3::xxh3_64(root.as_os_str().as_encoded_bytes());
-    let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let name: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(32)
         .collect();
     cache_base().join(format!("{}-{:016x}", name, h))

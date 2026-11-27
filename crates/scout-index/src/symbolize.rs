@@ -33,15 +33,27 @@ pub struct SymbolizeStats {
 
 /// True when the index wants symbols and some segment has none yet.
 pub fn needed(dir: &Path) -> bool {
-    Manifest::load(dir).map(|m| m.symbols && m.segments.iter().any(|s| !s.syms)).unwrap_or(false)
+    Manifest::load(dir)
+        .map(|m| m.symbols && m.segments.iter().any(|s| !s.syms))
+        .unwrap_or(false)
 }
 
 /// Fills in missing sidecars. Returns `None` if another process holds the
 /// symbols lock. `cancel` is checked between chunks of files.
-pub fn backfill(root: &Path, dir: &Path, threads: usize, progress: bool, cancel: &AtomicBool) -> Result<Option<SymbolizeStats>> {
-    let Some(_guard) = lock::try_lock(&dir.join(SYMBOLS_LOCK))? else { return Ok(None) };
+pub fn backfill(
+    root: &Path,
+    dir: &Path,
+    threads: usize,
+    progress: bool,
+    cancel: &AtomicBool,
+) -> Result<Option<SymbolizeStats>> {
+    let Some(_guard) = lock::try_lock(&dir.join(SYMBOLS_LOCK))? else {
+        return Ok(None);
+    };
     let t0 = Instant::now();
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads.max(1)).build()?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads.max(1))
+        .build()?;
     let mut stats = SymbolizeStats::default();
     let cpu = AtomicU64::new(0);
     // A compaction can replace a segment while we work on it; retry a few
@@ -51,7 +63,9 @@ pub fn backfill(root: &Path, dir: &Path, threads: usize, progress: bool, cancel:
         if !index.manifest.symbols {
             break;
         }
-        let todo: Vec<usize> = (0..index.segments.len()).filter(|&i| index.segments[i].syms.is_none()).collect();
+        let todo: Vec<usize> = (0..index.segments.len())
+            .filter(|&i| index.segments[i].syms.is_none())
+            .collect();
         if todo.is_empty() {
             break;
         }
@@ -79,7 +93,9 @@ pub fn backfill(root: &Path, dir: &Path, threads: usize, progress: bool, cancel:
                             };
                             // Re-detect with content only for .h files.
                             let abs = root.join(String::from_utf8_lossy(rel).as_ref());
-                            let Ok(data) = fs::read(&abs) else { return (id, Vec::new()) };
+                            let Ok(data) = fs::read(&abs) else {
+                                return (id, Vec::new());
+                            };
                             let lang = if rel.ends_with(b".h") {
                                 scout_symbols::Lang::detect(rel, &data).unwrap_or(lang)
                             } else {
@@ -111,7 +127,8 @@ pub fn backfill(root: &Path, dir: &Path, threads: usize, progress: bool, cancel:
                 Some(info) if !info.syms => {
                     let final_name = info.sym_name();
                     stats.bytes += fs::metadata(&tmp)?.len();
-                    fs::rename(&tmp, dir.join(&final_name)).with_context(|| format!("installing {}", final_name))?;
+                    fs::rename(&tmp, dir.join(&final_name))
+                        .with_context(|| format!("installing {}", final_name))?;
                     info.syms = true;
                     m.generation += 1;
                     m.store(dir)?;

@@ -48,7 +48,14 @@ pub fn stdout_is_tty() -> bool {
 }
 
 impl<W: Write> Printer<W> {
-    pub fn new(out: W, format: Format, color: bool, before: usize, after: usize, root: &Path) -> Printer<W> {
+    pub fn new(
+        out: W,
+        format: Format,
+        color: bool,
+        before: usize,
+        after: usize,
+        root: &Path,
+    ) -> Printer<W> {
         Printer {
             out,
             format,
@@ -86,7 +93,9 @@ impl<W: Write> Printer<W> {
             return Vec::new();
         }
         let lines = self.lines_of(path);
-        (from..=to).filter_map(|n| lines.get(n as usize - 1).map(|l| (n, l.clone()))).collect()
+        (from..=to)
+            .filter_map(|n| lines.get(n as usize - 1).map(|l| (n, l.clone())))
+            .collect()
     }
 
     pub fn hit(&mut self, h: &Hit) -> io::Result<()> {
@@ -155,10 +164,16 @@ impl<W: Write> Printer<W> {
                     v["in"] = json!(c);
                 }
                 if self.before + self.after > 0 {
-                    let b = self.context(&h.path, h.line.saturating_sub(self.before as u64).max(1), h.line - 1);
+                    let b = self.context(
+                        &h.path,
+                        h.line.saturating_sub(self.before as u64).max(1),
+                        h.line - 1,
+                    );
                     let a = self.context(&h.path, h.line + 1, h.line + self.after as u64);
                     let text = |v: Vec<(u64, Vec<u8>)>| {
-                        v.into_iter().map(|(_, l)| String::from_utf8_lossy(&l).into_owned()).collect::<Vec<_>>()
+                        v.into_iter()
+                            .map(|(_, l)| String::from_utf8_lossy(&l).into_owned())
+                            .collect::<Vec<_>>()
                     };
                     v["before"] = json!(text(b));
                     v["after"] = json!(text(a));
@@ -170,7 +185,11 @@ impl<W: Write> Printer<W> {
                 let same_file = h.path == self.last_file;
                 if self.before + self.after > 0 {
                     let start = h.line.saturating_sub(self.before as u64).max(1);
-                    let start = if same_file { start.max(self.last_printed + 1) } else { start };
+                    let start = if same_file {
+                        start.max(self.last_printed + 1)
+                    } else {
+                        start
+                    };
                     if self.printed_any && (!same_file || start > self.last_printed + 1) {
                         writeln!(self.out, "--")?;
                     }
@@ -190,7 +209,10 @@ impl<W: Write> Printer<W> {
     /// After the last hit of a file, print its trailing context. Called with
     /// the next hit (or at the end) so overlapping context isn't repeated.
     pub fn flush_after(&mut self, next: Option<&Hit>) -> io::Result<()> {
-        if self.after == 0 || self.last_file.is_empty() || !matches!(self.format, Format::Text | Format::Vimgrep) {
+        if self.after == 0
+            || self.last_file.is_empty()
+            || !matches!(self.format, Format::Text | Format::Vimgrep)
+        {
             return Ok(());
         }
         let path = self.last_file.clone();
@@ -207,7 +229,14 @@ impl<W: Write> Printer<W> {
         Ok(())
     }
 
-    fn line(&mut self, path: &str, n: u64, h: Option<&Hit>, text: &[u8], sep: char) -> io::Result<()> {
+    fn line(
+        &mut self,
+        path: &str,
+        n: u64,
+        h: Option<&Hit>,
+        text: &[u8],
+        sep: char,
+    ) -> io::Result<()> {
         let c = self.color;
         let w = &mut self.out;
         if c {

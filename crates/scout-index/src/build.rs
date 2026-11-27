@@ -14,11 +14,11 @@ use crate::filter::{self, Skip};
 use crate::lock;
 use crate::manifest::{self, Manifest, SegmentInfo};
 use crate::merge::{merge, merge_has_syms, MergeInput};
-use crate::symfile::{sym_path, SymBuilder, SymFile};
-use scout_symbols::Sym;
 use crate::rules::Rules;
 use crate::segment::{FileMeta, Segment, SegmentWriter};
+use crate::symfile::{sym_path, SymBuilder, SymFile};
 use crate::trigram::{Extractor, NUM_TRIGRAMS};
+use scout_symbols::Sym;
 
 #[derive(Clone, Debug)]
 pub struct BuildOptions {
@@ -55,7 +55,11 @@ impl Default for BuildOptions {
 
 /// Half the cores, at least one.
 pub fn default_threads() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).div_ceil(2).max(1)
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+        .div_ceil(2)
+        .max(1)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,13 +84,24 @@ pub struct BuildStats {
 }
 
 pub enum Extracted {
-    Indexed { meta: FileMeta, trigrams: Vec<u32>, bytes: u64, syms: Vec<Sym>, sym_ns: u64 },
+    Indexed {
+        meta: FileMeta,
+        trigrams: Vec<u32>,
+        bytes: u64,
+        syms: Vec<Sym>,
+        sym_ns: u64,
+    },
     Skipped(Skip),
 }
 
 /// Reads one file and extracts its trigrams (and symbols if asked),
 /// applying the content rules.
-pub fn read_and_extract(abs: &Path, max_size: u64, ex: &mut Extractor, symbols: bool) -> Result<Extracted> {
+pub fn read_and_extract(
+    abs: &Path,
+    max_size: u64,
+    ex: &mut Extractor,
+    symbols: bool,
+) -> Result<Extracted> {
     let md = fs::symlink_metadata(abs)?;
     if let Some(s) = filter::check_size(md.len(), max_size) {
         return Ok(Extracted::Skipped(s));
@@ -110,7 +125,13 @@ pub fn read_and_extract(abs: &Path, max_size: u64, ex: &mut Extractor, symbols: 
     } else {
         (Vec::new(), 0)
     };
-    Ok(Extracted::Indexed { meta, trigrams, bytes: data.len() as u64, syms, sym_ns })
+    Ok(Extracted::Indexed {
+        meta,
+        trigrams,
+        bytes: data.len() as u64,
+        syms,
+        sym_ns,
+    })
 }
 
 thread_local! {
@@ -125,7 +146,12 @@ fn with_extractor<R>(f: impl FnOnce(&mut Extractor) -> R) -> R {
 }
 
 /// Walks the tree and returns sorted relative paths of candidate files.
-pub fn walk(rules: &Rules, threads: usize, max_size: u64, skipped_large: &AtomicU64) -> Vec<PathBuf> {
+pub fn walk(
+    rules: &Rules,
+    threads: usize,
+    max_size: u64,
+    skipped_large: &AtomicU64,
+) -> Vec<PathBuf> {
     let (tx, rx) = mpsc::channel::<Vec<PathBuf>>();
     let root = rules.root().to_path_buf();
     rules.walker(threads).build_parallel().run(|| {
@@ -155,7 +181,11 @@ pub fn walk(rules: &Rules, threads: usize, max_size: u64, skipped_large: &Atomic
     });
     drop(tx);
     let mut all: Vec<PathBuf> = rx.into_iter().flatten().collect();
-    all.par_sort_unstable_by(|a, b| a.as_os_str().as_encoded_bytes().cmp(b.as_os_str().as_encoded_bytes()));
+    all.par_sort_unstable_by(|a, b| {
+        a.as_os_str()
+            .as_encoded_bytes()
+            .cmp(b.as_os_str().as_encoded_bytes())
+    });
     all
 }
 
@@ -169,12 +199,22 @@ struct Batch {
 
 impl Batch {
     fn new(symbols: bool) -> Batch {
-        Batch { files: Vec::new(), tris: Vec::new(), pairs: 0, syms: symbols.then(SymBuilder::new) }
+        Batch {
+            files: Vec::new(),
+            tris: Vec::new(),
+            pairs: 0,
+            syms: symbols.then(SymBuilder::new),
+        }
     }
 
     /// Memory in units of 8-byte postings pairs.
     fn weight(&self) -> usize {
-        self.pairs + self.syms.as_ref().map(|s| s.approx_bytes() / 8).unwrap_or(0)
+        self.pairs
+            + self
+                .syms
+                .as_ref()
+                .map(|s| s.approx_bytes() / 8)
+                .unwrap_or(0)
     }
 }
 
@@ -238,12 +278,20 @@ pub fn build_full(root: &Path, dir: &Path, opts: &BuildOptions) -> Result<BuildS
     let mut stats = BuildStats::default();
 
     let skipped_large = AtomicU64::new(0);
-    let paths = walk(&rules, opts.threads.max(1), opts.max_file_size, &skipped_large);
+    let paths = walk(
+        &rules,
+        opts.threads.max(1),
+        opts.max_file_size,
+        &skipped_large,
+    );
     stats.walk_time = t0.elapsed();
     stats.files_walked = paths.len() as u64 + skipped_large.load(Ordering::Relaxed);
     stats.skipped_large = skipped_large.load(Ordering::Relaxed);
     if opts.progress {
-        eprintln!("scout: walked {} files in {:.2?}", stats.files_walked, stats.walk_time);
+        eprintln!(
+            "scout: walked {} files in {:.2?}",
+            stats.files_walked, stats.walk_time
+        );
     }
 
     let scratch_bytes = NUM_TRIGRAMS * 4;
@@ -263,13 +311,22 @@ pub fn build_full(root: &Path, dir: &Path, opts: &BuildOptions) -> Result<BuildS
                 .enumerate()
                 .map(|(i, rel)| {
                     let abs = root.join(rel);
-                    (i, with_extractor(|ex| read_and_extract(&abs, opts.max_file_size, ex, inline)))
+                    (
+                        i,
+                        with_extractor(|ex| read_and_extract(&abs, opts.max_file_size, ex, inline)),
+                    )
                 })
                 .collect()
         });
         for (i, r) in results {
             match r {
-                Ok(Extracted::Indexed { meta, trigrams, bytes, syms, sym_ns: ns }) => {
+                Ok(Extracted::Indexed {
+                    meta,
+                    trigrams,
+                    bytes,
+                    syms,
+                    sym_ns: ns,
+                }) => {
                     stats.files_indexed += 1;
                     sym_ns += ns;
                     stats.symbols += syms.len() as u64;
@@ -278,7 +335,9 @@ pub fn build_full(root: &Path, dir: &Path, opts: &BuildOptions) -> Result<BuildS
                     }
                     stats.bytes_indexed += bytes;
                     batch.pairs += trigrams.len();
-                    batch.files.push((chunk[i].as_os_str().as_encoded_bytes().to_vec(), meta));
+                    batch
+                        .files
+                        .push((chunk[i].as_os_str().as_encoded_bytes().to_vec(), meta));
                     batch.tris.push(trigrams);
                 }
                 Ok(Extracted::Skipped(Skip::TooLarge)) => stats.skipped_large += 1,
@@ -293,7 +352,12 @@ pub fn build_full(root: &Path, dir: &Path, opts: &BuildOptions) -> Result<BuildS
             flush_batch(&mut batch, &p, &mut counts)?;
             temp_segments.push(p);
             if opts.progress {
-                eprintln!("scout: {}/{} files, {} batches", n, paths.len(), temp_segments.len());
+                eprintln!(
+                    "scout: {}/{} files, {} batches",
+                    n,
+                    paths.len(),
+                    temp_segments.len()
+                );
             }
         }
     }
@@ -309,7 +373,10 @@ pub fn build_full(root: &Path, dir: &Path, opts: &BuildOptions) -> Result<BuildS
     // Swap in under the writer lock so a running daemon can't interleave.
     let _guard = lock::lock(&dir.join(lock::WRITE_LOCK))?;
     let mut m = match Manifest::load(dir) {
-        Ok(old) => Manifest { segments: Vec::new(), ..old },
+        Ok(old) => Manifest {
+            segments: Vec::new(),
+            ..old
+        },
         Err(_) => Manifest::new(root, opts.excludes.clone()),
     };
     m.root = root.to_string_lossy().into_owned();
@@ -326,13 +393,29 @@ pub fn build_full(root: &Path, dir: &Path, opts: &BuildOptions) -> Result<BuildS
         if opts.progress {
             eprintln!("scout: merging {} batches", temp_segments.len());
         }
-        let segs: Vec<Segment> = temp_segments.iter().map(|p| Segment::open(p)).collect::<Result<_>>()?;
+        let segs: Vec<Segment> = temp_segments
+            .iter()
+            .map(|p| Segment::open(p))
+            .collect::<Result<_>>()?;
         let syms: Vec<Option<SymFile>> = temp_segments
             .iter()
-            .map(|p| if inline { SymFile::open(&sym_path(p)).map(Some) } else { Ok(None) })
+            .map(|p| {
+                if inline {
+                    SymFile::open(&sym_path(p)).map(Some)
+                } else {
+                    Ok(None)
+                }
+            })
             .collect::<Result<_>>()?;
-        let inputs: Vec<MergeInput> =
-            segs.iter().zip(&syms).map(|(s, y)| MergeInput { seg: s, del: None, syms: y.as_ref() }).collect();
+        let inputs: Vec<MergeInput> = segs
+            .iter()
+            .zip(&syms)
+            .map(|(s, y)| MergeInput {
+                seg: s,
+                del: None,
+                syms: y.as_ref(),
+            })
+            .collect();
         debug_assert_eq!(merge_has_syms(&inputs), inline);
         let n = merge(&inputs, &final_path)?;
         drop(inputs);
@@ -379,7 +462,11 @@ mod tests {
         fs::write(root.join("bin.dat"), b"ab\0cd").unwrap();
         let idx = tempfile::tempdir().unwrap();
         // A tiny budget forces many batches and a merge.
-        let opts = BuildOptions { threads: 2, mem_budget: 0, ..Default::default() };
+        let opts = BuildOptions {
+            threads: 2,
+            mem_budget: 0,
+            ..Default::default()
+        };
         // pair_limit floors at 1M pairs; shrink further via many files is
         // impractical here, so check the single-batch path and then the
         // merge path directly.
@@ -390,7 +477,9 @@ mod tests {
         assert_eq!(index.live_count(), 300);
         let (si, id) = index.lookup(b"d3/f10.txt").unwrap();
         let mut v = Vec::new();
-        index.segments[si].seg.postings(crate::trigram::pack(b'h', b'e', b'l'), &mut v);
+        index.segments[si]
+            .seg
+            .postings(crate::trigram::pack(b'h', b'e', b'l'), &mut v);
         assert_eq!(v.len(), 300);
         assert!(v.contains(&id));
     }
@@ -404,7 +493,9 @@ mod tests {
             let mut batch = Batch::new(false);
             for f in 0..5u32 {
                 let n = b * 5 + f;
-                batch.files.push((format!("p{:03}", n).into_bytes(), FileMeta::default()));
+                batch
+                    .files
+                    .push((format!("p{:03}", n).into_bytes(), FileMeta::default()));
                 batch.tris.push(vec![1, 100 + n]);
             }
             let p = idx.path().join(format!("t{}.idx", b));
@@ -412,7 +503,14 @@ mod tests {
             segs.push(Segment::open(&p).unwrap());
         }
         assert!(counts.iter().all(|&c| c == 0));
-        let inputs: Vec<MergeInput> = segs.iter().map(|s| MergeInput { seg: s, del: None, syms: None }).collect();
+        let inputs: Vec<MergeInput> = segs
+            .iter()
+            .map(|s| MergeInput {
+                seg: s,
+                del: None,
+                syms: None,
+            })
+            .collect();
         let out = idx.path().join("m.idx");
         assert_eq!(merge(&inputs, &out).unwrap(), 15);
         let m = Segment::open(&out).unwrap();

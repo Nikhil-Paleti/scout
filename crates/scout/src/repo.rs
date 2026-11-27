@@ -61,17 +61,31 @@ fn split_z(out: &[u8]) -> Vec<PathBuf> {
 /// Files that differ between `commit` and the working tree. None if git
 /// can't answer (no repo, commit gone after a shallow fetch or gc).
 pub fn changed_since(root: &Path, commit: &str) -> Option<Vec<PathBuf>> {
-    let out = git(root, &["diff", "--name-only", "--no-renames", "-z", commit, "--"])?;
+    let out = git(
+        root,
+        &["diff", "--name-only", "--no-renames", "-z", commit, "--"],
+    )?;
     Some(split_z(&out))
 }
 
 /// Modified, staged, deleted and untracked (not ignored) files.
 pub fn status_paths(root: &Path) -> Option<Vec<PathBuf>> {
-    let out = git(root, &["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"])?;
+    let out = git(
+        root,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ],
+    )?;
     let mut paths = Vec::new();
     for rec in out.split(|&b| b == 0) {
         if rec.len() > 3 {
-            paths.push(PathBuf::from(String::from_utf8_lossy(&rec[3..]).into_owned()));
+            paths.push(PathBuf::from(
+                String::from_utf8_lossy(&rec[3..]).into_owned(),
+            ));
         }
     }
     Some(paths)

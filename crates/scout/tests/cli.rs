@@ -18,12 +18,18 @@ impl Env {
         let cache = tmp.path().join("cache");
         fs::create_dir_all(&root).unwrap();
         let root = root.canonicalize().unwrap();
-        Env { _tmp: tmp, root, cache }
+        Env {
+            _tmp: tmp,
+            root,
+            cache,
+        }
     }
 
     fn scout(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_scout"));
-        c.current_dir(&self.root).env("SCOUT_CACHE_DIR", &self.cache).stdin(Stdio::null());
+        c.current_dir(&self.root)
+            .env("SCOUT_CACHE_DIR", &self.cache)
+            .stdin(Stdio::null());
         c
     }
 
@@ -35,7 +41,14 @@ impl Env {
 
     fn git(&self, args: &[&str]) {
         let ok = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "init.defaultBranch=main",
+            ])
             .args(args)
             .current_dir(&self.root)
             .stdout(Stdio::null())
@@ -47,8 +60,15 @@ impl Env {
     }
 
     fn search(&self, q: &str) -> Vec<String> {
-        let out = self.scout().args(["search", "--vimgrep", q]).output().unwrap();
-        let mut v: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(|s| s.to_string()).collect();
+        let out = self
+            .scout()
+            .args(["search", "--vimgrep", q])
+            .output()
+            .unwrap();
+        let mut v: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|s| s.to_string())
+            .collect();
         v.sort();
         v
     }
@@ -85,7 +105,12 @@ impl Env {
     }
 
     fn notify(&self, rel: &str) {
-        let ok = self.scout().args(["notify", rel]).status().unwrap().success();
+        let ok = self
+            .scout()
+            .args(["notify", rel])
+            .status()
+            .unwrap()
+            .success();
         assert!(ok);
     }
 }
@@ -117,21 +142,50 @@ fn build_search_and_exit_codes() {
     e.write(".hidden/b.txt", "alpha_handler in a hidden dir\n");
     e.write(".gitignore", "out/\n");
     e.write("out/gen.rs", "fn alpha_handler() {}\n");
-    let st = e.scout().args(["search", "--no-auto-index", "alpha"]).output().unwrap();
+    let st = e
+        .scout()
+        .args(["search", "--no-auto-index", "alpha"])
+        .output()
+        .unwrap();
     assert_eq!(st.status.code(), Some(2), "no index yet");
-    assert!(e.scout().args(["build", "--quiet"]).status().unwrap().success());
+    assert!(e
+        .scout()
+        .args(["build", "--quiet"])
+        .status()
+        .unwrap()
+        .success());
     assert_eq!(
         e.search("alpha_handler"),
-        vec![".hidden/b.txt:1:1:alpha_handler in a hidden dir", "src/a.rs:1:4:fn alpha_handler() {}"]
+        vec![
+            ".hidden/b.txt:1:1:alpha_handler in a hidden dir",
+            "src/a.rs:1:4:fn alpha_handler() {}"
+        ]
     );
     let none = e.scout().args(["search", "zzz_nothing"]).output().unwrap();
     assert_eq!(none.status.code(), Some(1));
-    let why = e.scout().args(["status", "--why", "out/gen.rs"]).output().unwrap();
+    let why = e
+        .scout()
+        .args(["status", "--why", "out/gen.rs"])
+        .output()
+        .unwrap();
     let why = String::from_utf8_lossy(&why.stdout);
-    assert!(why.contains("skipped") && why.contains(".gitignore"), "{}", why);
-    let json = e.scout().args(["search", "--json", "handler"]).output().unwrap();
-    let first: serde_json::Value =
-        serde_json::from_str(String::from_utf8_lossy(&json.stdout).lines().next().unwrap()).unwrap();
+    assert!(
+        why.contains("skipped") && why.contains(".gitignore"),
+        "{}",
+        why
+    );
+    let json = e
+        .scout()
+        .args(["search", "--json", "handler"])
+        .output()
+        .unwrap();
+    let first: serde_json::Value = serde_json::from_str(
+        String::from_utf8_lossy(&json.stdout)
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
     assert!(first["ranges"].as_array().unwrap().len() == 1);
 }
 
@@ -143,7 +197,12 @@ fn daemon_keeps_index_fresh() {
     e.write("src/b.rs", "fn two() {}\n");
     e.git(&["add", "."]);
     e.git(&["commit", "-qm", "init"]);
-    assert!(e.scout().args(["build", "--quiet"]).status().unwrap().success());
+    assert!(e
+        .scout()
+        .args(["build", "--quiet"])
+        .status()
+        .unwrap()
+        .success());
     let _d = e.serve();
 
     // A save notice makes new text searchable within a second.
@@ -152,10 +211,20 @@ fn daemon_keeps_index_fresh() {
     e.notify("src/a.rs");
     let r = e.wait_for("fresh_marker_xyz", 1);
     assert_eq!(r, vec!["src/a.rs:1:12:fn one() { fresh_marker_xyz(); }"]);
-    assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
+    assert!(
+        t.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        t.elapsed()
+    );
     // The delta carries symbols: the new call and the old definition.
-    assert_eq!(e.search("calls:fresh_marker_xyz"), vec!["src/a.rs:1:12:fn one() { fresh_marker_xyz(); }"]);
-    assert_eq!(e.search("sym:one"), vec!["src/a.rs:1:4:fn one() { fresh_marker_xyz(); }"]);
+    assert_eq!(
+        e.search("calls:fresh_marker_xyz"),
+        vec!["src/a.rs:1:12:fn one() { fresh_marker_xyz(); }"]
+    );
+    assert_eq!(
+        e.search("sym:one"),
+        vec!["src/a.rs:1:4:fn one() { fresh_marker_xyz(); }"]
+    );
 
     // New untracked file, then a deletion.
     e.write("notes/todo.md", "fresh_marker_xyz too\n");
@@ -171,9 +240,18 @@ fn daemon_keeps_index_fresh() {
     e.git(&["add", "."]);
     e.git(&["commit", "-qm", "c"]);
     let log = e.root.parent().unwrap().join("daemon.log");
-    assert_eq!(e.wait_for("branch_only_fn", 1).len(), 1, "git poll should pick up the commit:\n{}", fs::read_to_string(&log).unwrap_or_default());
+    assert_eq!(
+        e.wait_for("branch_only_fn", 1).len(),
+        1,
+        "git poll should pick up the commit:\n{}",
+        fs::read_to_string(&log).unwrap_or_default()
+    );
     e.git(&["checkout", "-q", "main"]);
-    assert_eq!(e.wait_for("branch_only_fn", 0).len(), 0, "checkout back removes it");
+    assert_eq!(
+        e.wait_for("branch_only_fn", 0).len(),
+        0,
+        "checkout back removes it"
+    );
 
     // Many small updates get compacted.
     for i in 0..12 {
@@ -181,7 +259,15 @@ fn daemon_keeps_index_fresh() {
         e.notify("src/b.rs");
         e.wait_for(&format!("rev_{}\\(", i), 1);
     }
-    let segs = index_files(&fs::read_dir(&e.cache).unwrap().next().unwrap().unwrap().path().join("manifest.json"));
+    let segs = index_files(
+        &fs::read_dir(&e.cache)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .join("manifest.json"),
+    );
     assert!(segs <= 9, "{} segments after 12 updates", segs);
     assert_eq!(e.search("rev_11").len(), 1);
     assert_eq!(e.search("rev_10").len(), 0);
@@ -192,7 +278,12 @@ fn scoutignore_change_reindexes() {
     let e = Env::new();
     e.write(".gitignore", "gen/\n");
     e.write("gen/api.h", "int generated_api_fn(void);\n");
-    assert!(e.scout().args(["build", "--quiet"]).status().unwrap().success());
+    assert!(e
+        .scout()
+        .args(["build", "--quiet"])
+        .status()
+        .unwrap()
+        .success());
     assert!(e.search("generated_api_fn").is_empty());
     let _d = e.serve();
     e.write(".scoutignore", "!gen/\n");
@@ -207,32 +298,64 @@ fn symbols_and_output_formats() {
         "src/widget.cc",
         "namespace ui {\nclass Widget {\n public:\n  void Draw();\n};\nvoid Widget::Draw() {\n  Paint(1);\n}\nvoid Paint(int n) {}\n}\n",
     );
-    e.write("app/main.py", "from ui import paint\n\ndef main():\n    Paint(2)\n    run()\n\ndef run():\n    pass\n");
-    e.write("app/BUILD", "py_binary(\n    name = \"app\",\n    srcs = [\"main.py\"],\n)\n");
+    e.write(
+        "app/main.py",
+        "from ui import paint\n\ndef main():\n    Paint(2)\n    run()\n\ndef run():\n    pass\n",
+    );
+    e.write(
+        "app/BUILD",
+        "py_binary(\n    name = \"app\",\n    srcs = [\"main.py\"],\n)\n",
+    );
     let b = e.scout().args(["build", "--quiet"]).output().unwrap();
     assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
 
     let lines = |args: &[&str]| -> Vec<String> {
         let o = e.scout().args(args).output().unwrap();
-        String::from_utf8_lossy(&o.stdout).lines().map(|s| s.to_string()).collect()
+        String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|s| s.to_string())
+            .collect()
     };
     // Definitions: exact name first; the header-style declaration comes too.
     let defs = lines(&["sym", "Draw", "--vimgrep"]);
     assert_eq!(defs.len(), 2, "{defs:?}");
-    assert!(defs.iter().any(|l| l.starts_with("src/widget.cc:6:")), "{defs:?}");
-    assert_eq!(lines(&["sym:Paint kind:function", "--vimgrep"]), vec!["src/widget.cc:9:6:void Paint(int n) {}"]);
-    assert_eq!(lines(&["sym", "app", "lang:bazel", "--vimgrep"]), vec!["app/BUILD:2:13:    name = \"app\","]);
+    assert!(
+        defs.iter().any(|l| l.starts_with("src/widget.cc:6:")),
+        "{defs:?}"
+    );
+    assert_eq!(
+        lines(&["sym:Paint kind:function", "--vimgrep"]),
+        vec!["src/widget.cc:9:6:void Paint(int n) {}"]
+    );
+    assert_eq!(
+        lines(&["sym", "app", "lang:bazel", "--vimgrep"]),
+        vec!["app/BUILD:2:13:    name = \"app\","]
+    );
 
     // Callers, with the enclosing function in JSON.
     let calls = lines(&["calls", "Paint", "--json"]);
     assert_eq!(calls.len(), 3, "{calls:?}");
-    let v: Vec<serde_json::Value> = calls.iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let v: Vec<serde_json::Value> = calls
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
     let mut ins: Vec<(String, String)> = v[..2]
         .iter()
-        .map(|h| (h["path"].as_str().unwrap().to_string(), h["in"].as_str().unwrap().to_string()))
+        .map(|h| {
+            (
+                h["path"].as_str().unwrap().to_string(),
+                h["in"].as_str().unwrap().to_string(),
+            )
+        })
         .collect();
     ins.sort();
-    assert_eq!(ins, vec![("app/main.py".into(), "main".into()), ("src/widget.cc".into(), "Draw".into())]);
+    assert_eq!(
+        ins,
+        vec![
+            ("app/main.py".into(), "main".into()),
+            ("src/widget.cc".into(), "Draw".into())
+        ]
+    );
     assert_eq!(v[0]["kind"], "call");
     assert_eq!(v[0]["symbol"], "Paint");
     assert_eq!(v[2]["type"], "summary");
@@ -244,33 +367,69 @@ fn symbols_and_output_formats() {
 
     // Context lines and `scout QUERY` shorthand.
     let ctx = lines(&["\"def run\"", "-C", "1", "--color", "never"]);
-    assert_eq!(ctx, vec!["app/main.py-6-", "app/main.py:7:1:def run():", "app/main.py-8-    pass"]);
+    assert_eq!(
+        ctx,
+        vec![
+            "app/main.py-6-",
+            "app/main.py:7:1:def run():",
+            "app/main.py-8-    pass"
+        ]
+    );
     let ctx = lines(&["sym:run", "-A", "1", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&ctx[0]).unwrap();
     assert_eq!(v["after"], serde_json::json!(["    pass"]));
 
     // Google Code Search behavior: a plain term matches file names, listed
     // first; file:-only queries list files; --vimgrep stays contents only.
-    let v: Vec<serde_json::Value> =
-        lines(&["widget", "--json"]).iter().map(|l| serde_json::from_str(l).unwrap()).collect();
-    assert_eq!((v[0]["kind"].as_str(), v[0]["path"].as_str()), (Some("file"), Some("src/widget.cc")));
-    assert!(v.iter().skip_while(|h| h["kind"] == "file").all(|h| h["kind"] != "file"));
-    assert_eq!(lines(&["file:widget", "--color", "never"]), vec!["src/widget.cc  [file]"]);
-    assert!(lines(&["widget", "--vimgrep"]).iter().all(|l| !l.ends_with("[file]") && l.contains(':')));
+    let v: Vec<serde_json::Value> = lines(&["widget", "--json"])
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(
+        (v[0]["kind"].as_str(), v[0]["path"].as_str()),
+        (Some("file"), Some("src/widget.cc"))
+    );
+    assert!(v
+        .iter()
+        .skip_while(|h| h["kind"] == "file")
+        .all(|h| h["kind"] != "file"));
+    assert_eq!(
+        lines(&["file:widget", "--color", "never"]),
+        vec!["src/widget.cc  [file]"]
+    );
+    assert!(lines(&["widget", "--vimgrep"])
+        .iter()
+        .all(|l| !l.ends_with("[file]") && l.contains(':')));
     // AND per file, OR, exclusion.
     let both = lines(&["Paint run", "--vimgrep"]);
-    assert!(both.iter().all(|l| l.starts_with("app/main.py")), "{both:?}");
-    assert!(lines(&["Paint -run", "--vimgrep"]).iter().all(|l| !l.starts_with("app/main.py")));
+    assert!(
+        both.iter().all(|l| l.starts_with("app/main.py")),
+        "{both:?}"
+    );
+    assert!(lines(&["Paint -run", "--vimgrep"])
+        .iter()
+        .all(|l| !l.starts_with("app/main.py")));
     assert!(!lines(&["(nothing_here OR Paint) lang:py", "--vimgrep"]).is_empty());
     // scout files: fuzzy and regex.
     assert_eq!(lines(&["files", "wdgt"]), vec!["src/widget.cc"]);
     assert_eq!(lines(&["files", r"\.py$"]), vec!["app/main.py"]);
-    let v: serde_json::Value = serde_json::from_str(&lines(&["files", "--json", "main"])[0]).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(&lines(&["files", "--json", "main"])[0]).unwrap();
     assert_eq!(v["path"], "app/main.py");
 
     // Exit codes: 1 for no hits, 2 for a bad query.
-    assert_eq!(e.scout().args(["calls", "Nope"]).status().unwrap().code(), Some(1));
-    assert_eq!(e.scout().args(["sym:x kind:bogus"]).status().unwrap().code(), Some(2));
+    assert_eq!(
+        e.scout().args(["calls", "Nope"]).status().unwrap().code(),
+        Some(1)
+    );
+    assert_eq!(
+        e.scout()
+            .args(["sym:x kind:bogus"])
+            .status()
+            .unwrap()
+            .code(),
+        Some(2)
+    );
 }
 
 impl Env {
@@ -283,7 +442,10 @@ impl Env {
     fn wait_indexed_and_stop(&self) {
         let t = Instant::now();
         while self.status()["indexed"] != true {
-            assert!(t.elapsed() < Duration::from_secs(20), "background build never finished");
+            assert!(
+                t.elapsed() < Duration::from_secs(20),
+                "background build never finished"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         let _ = self.scout().arg("stop").status();
@@ -291,23 +453,44 @@ impl Env {
 }
 
 fn json_lines(out: &[u8]) -> Vec<serde_json::Value> {
-    String::from_utf8_lossy(out).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    String::from_utf8_lossy(out)
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
 }
 
 #[test]
 fn search_without_index_scans_and_builds() {
     let e = Env::new();
-    e.write("src/a.rs", "fn beta_handler() {}\nfn main() { beta_handler(); }\n");
+    e.write(
+        "src/a.rs",
+        "fn beta_handler() {}\nfn main() { beta_handler(); }\n",
+    );
     e.write(".hidden/b.txt", "beta_handler in a hidden dir\n");
     e.write(".gitignore", "out/\n");
     e.write("out/gen.rs", "fn beta_handler() {}\n");
-    e.write("min.js", &format!("var beta_handler=1;{}\n", "x".repeat(2000)));
+    e.write(
+        "min.js",
+        &format!("var beta_handler=1;{}\n", "x".repeat(2000)),
+    );
     fs::write(e.root.join("blob.bin"), b"beta_handler\0\0\0").unwrap();
 
     // Text output: same hits the index would give, plus a note on stderr.
-    let out = e.scout().args(["search", "--vimgrep", "beta_handler"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
-    let mut lines: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect();
+    let out = e
+        .scout()
+        .args(["search", "--vimgrep", "beta_handler"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut lines: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(String::from)
+        .collect();
     lines.sort();
     assert_eq!(
         lines,
@@ -320,20 +503,36 @@ fn search_without_index_scans_and_builds() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("building one in the background"));
 
     // Filters and exit codes work the same way.
-    let none = e.scout().args(["search", "zzz_nothing_here"]).output().unwrap();
+    let none = e
+        .scout()
+        .args(["search", "zzz_nothing_here"])
+        .output()
+        .unwrap();
     assert_eq!(none.status.code(), Some(1));
-    let json = e.scout().args(["search", "--json", "beta_handler file:src/"]).output().unwrap();
+    let json = e
+        .scout()
+        .args(["search", "--json", "beta_handler file:src/"])
+        .output()
+        .unwrap();
     let v = json_lines(&json.stdout);
     assert_eq!(v.len(), 3, "two hits and a summary");
     assert!(v[..2].iter().all(|h| h["path"] == "src/a.rs"));
     let summary = v.last().unwrap();
     assert_eq!(summary["type"], "summary");
     // The first search may already have finished the (tiny) build.
-    assert!(summary["index_status"] == "building" || summary["index_status"] == "ready", "{}", summary);
+    assert!(
+        summary["index_status"] == "building" || summary["index_status"] == "ready",
+        "{}",
+        summary
+    );
 
     // Once the background build lands, searches use the index.
     e.wait_indexed_and_stop();
-    let json = e.scout().args(["search", "--json", "beta_handler"]).output().unwrap();
+    let json = e
+        .scout()
+        .args(["search", "--json", "beta_handler"])
+        .output()
+        .unwrap();
     let v = json_lines(&json.stdout);
     assert_eq!(v.last().unwrap()["index_status"], "ready");
     assert_eq!(v.len(), 4);
@@ -345,7 +544,11 @@ fn symbol_query_without_index_says_building() {
     e.write("src/a.rs", "fn gamma() {}\n");
     let out = e.scout().args(["sym", "gamma"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("still building"), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("still building"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     e.wait_indexed_and_stop();
 }
 
@@ -353,8 +556,17 @@ fn symbol_query_without_index_says_building() {
 fn mcp_round_trip() {
     use std::io::{BufRead, BufReader, Write};
     let e = Env::new();
-    e.write("src/lib.rs", "pub fn delta_fn() {}\nfn caller() { delta_fn(); }\n");
-    let mut child = e.scout().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+    e.write(
+        "src/lib.rs",
+        "pub fn delta_fn() {}\nfn caller() { delta_fn(); }\n",
+    );
+    let mut child = e
+        .scout()
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     let mut call = |msg: serde_json::Value| -> serde_json::Value {
@@ -364,42 +576,87 @@ fn mcp_round_trip() {
         stdout.read_line(&mut line).unwrap();
         serde_json::from_str(&line).unwrap()
     };
-    let init = call(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}));
+    let init = call(
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}),
+    );
     assert_eq!(init["result"]["serverInfo"]["name"], "scout");
     let tools = call(serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
-    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["search", "find_symbol", "find_callers", "find_files", "index_status", "reindex"]);
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "search",
+            "find_symbol",
+            "find_callers",
+            "find_files",
+            "index_status",
+            "reindex"
+        ]
+    );
 
     // No index yet: search answers from a scan and says the index is building.
-    let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-        "params": {"name": "search", "arguments": {"query": "delta_fn"}}}));
-    let text = r["result"]["content"][0]["text"].as_str().unwrap().to_string();
-    assert!(text.contains("src/lib.rs") && text.contains("1: pub fn delta_fn() {}"), "{}", text);
+    let r = call(
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+        "params": {"name": "search", "arguments": {"query": "delta_fn"}}}),
+    );
+    let text = r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        text.contains("src/lib.rs") && text.contains("1: pub fn delta_fn() {}"),
+        "{}",
+        text
+    );
     assert!(text.contains("index_status: building"), "{}", text);
 
     // File names: a plain term lists matching files first; find_files is fuzzy.
-    let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
-        "params": {"name": "search", "arguments": {"query": "lib"}}}));
-    let text = r["result"]["content"][0]["text"].as_str().unwrap().to_string();
+    let r = call(
+        serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "search", "arguments": {"query": "lib"}}}),
+    );
+    let text = r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert!(text.starts_with("src/lib.rs  (file name)"), "{}", text);
-    let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
-        "params": {"name": "find_files", "arguments": {"query": "slb"}}}));
-    let text = r["result"]["content"][0]["text"].as_str().unwrap().to_string();
+    let r = call(
+        serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "find_files", "arguments": {"query": "slb"}}}),
+    );
+    let text = r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert!(text.starts_with("src/lib.rs\n"), "{}", text);
 
     // After the build, symbols work.
     let t = Instant::now();
     let text = loop {
-        let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
-            "params": {"name": "find_callers", "arguments": {"name": "delta_fn"}}}));
-        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("").to_string();
+        let r = call(
+            serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": {"name": "find_callers", "arguments": {"name": "delta_fn"}}}),
+        );
+        let text = r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         if text.contains("(in caller)") || t.elapsed() > Duration::from_secs(20) {
             break text;
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    assert!(text.contains("2: fn caller() { delta_fn(); }  (in caller)"), "{}", text);
+    assert!(
+        text.contains("2: fn caller() { delta_fn(); }  (in caller)"),
+        "{}",
+        text
+    );
     drop(stdin);
     let _ = child.wait();
     e.wait_indexed_and_stop();

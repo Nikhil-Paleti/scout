@@ -67,7 +67,9 @@ impl Q {
                 let snapshot = v.clone();
                 v.retain(|x| {
                     let ax = atoms(x);
-                    !snapshot.iter().any(|y| y != x && atoms(y).iter().all(|a| ax.contains(a)))
+                    !snapshot
+                        .iter()
+                        .any(|y| y != x && atoms(y).iter().all(|a| ax.contains(a)))
                 });
                 if v.len() == 1 {
                     v.pop().unwrap()
@@ -87,8 +89,20 @@ impl Q {
                 let b = scout_index::trigram::unpack(*t);
                 format!("{:?}", String::from_utf8_lossy(&b))
             }
-            Q::And(xs) => format!("({})", xs.iter().map(|q| q.describe()).collect::<Vec<_>>().join(" ")),
-            Q::Or(xs) => format!("({})", xs.iter().map(|q| q.describe()).collect::<Vec<_>>().join("|")),
+            Q::And(xs) => format!(
+                "({})",
+                xs.iter()
+                    .map(|q| q.describe())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            Q::Or(xs) => format!(
+                "({})",
+                xs.iter()
+                    .map(|q| q.describe())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
         }
     }
 }
@@ -164,20 +178,50 @@ struct Info {
 
 impl Info {
     fn any_match() -> Info {
-        Info { can_empty: true, exact: None, prefix: vec![vec![]], suffix: vec![vec![]], q: Q::All }
+        Info {
+            can_empty: true,
+            exact: None,
+            prefix: vec![vec![]],
+            suffix: vec![vec![]],
+            q: Q::All,
+        }
     }
     fn any_char() -> Info {
-        Info { can_empty: false, exact: None, prefix: vec![vec![]], suffix: vec![vec![]], q: Q::All }
+        Info {
+            can_empty: false,
+            exact: None,
+            prefix: vec![vec![]],
+            suffix: vec![vec![]],
+            q: Q::All,
+        }
     }
     fn empty_string() -> Info {
-        Info { can_empty: true, exact: Some(vec![vec![]]), prefix: vec![], suffix: vec![], q: Q::All }
+        Info {
+            can_empty: true,
+            exact: Some(vec![vec![]]),
+            prefix: vec![],
+            suffix: vec![],
+            q: Q::All,
+        }
     }
     fn no_match() -> Info {
-        Info { can_empty: false, exact: Some(vec![]), prefix: vec![], suffix: vec![], q: Q::None }
+        Info {
+            can_empty: false,
+            exact: Some(vec![]),
+            prefix: vec![],
+            suffix: vec![],
+            q: Q::None,
+        }
     }
     fn exact(set: Set) -> Info {
         let can_empty = set.iter().any(|s| s.is_empty());
-        Info { can_empty, exact: Some(set), prefix: vec![], suffix: vec![], q: Q::All }
+        Info {
+            can_empty,
+            exact: Some(set),
+            prefix: vec![],
+            suffix: vec![],
+            q: Q::All,
+        }
     }
 
     fn add_exact(&mut self) {
@@ -243,7 +287,12 @@ impl Info {
         let snapshot = t.clone();
         t.retain(|s| {
             !snapshot.iter().any(|o| {
-                o.len() < s.len() && if is_suffix { s.ends_with(o) } else { s.starts_with(o) }
+                o.len() < s.len()
+                    && if is_suffix {
+                        s.ends_with(o)
+                    } else {
+                        s.starts_with(o)
+                    }
             })
         });
     }
@@ -327,7 +376,11 @@ fn class_info(c: &Class) -> Info {
     let mut set: Set = Vec::new();
     match c {
         Class::Unicode(u) => {
-            let total: u32 = u.ranges().iter().map(|r| r.end() as u32 - r.start() as u32 + 1).sum();
+            let total: u32 = u
+                .ranges()
+                .iter()
+                .map(|r| r.end() as u32 - r.start() as u32 + 1)
+                .sum();
             if total > MAX_CLASS {
                 return Info::any_char();
             }
@@ -341,7 +394,11 @@ fn class_info(c: &Class) -> Info {
             }
         }
         Class::Bytes(b) => {
-            let total: u32 = b.ranges().iter().map(|r| r.end() as u32 - r.start() as u32 + 1).sum();
+            let total: u32 = b
+                .ranges()
+                .iter()
+                .map(|r| r.end() as u32 - r.start() as u32 + 1)
+                .sum();
             if total > MAX_CLASS {
                 return Info::any_char();
             }
@@ -424,12 +481,19 @@ mod tests {
     use super::*;
 
     fn p(re: &str) -> String {
-        let hir = regex_syntax::ParserBuilder::new().build().parse(re).unwrap();
+        let hir = regex_syntax::ParserBuilder::new()
+            .build()
+            .parse(re)
+            .unwrap();
         plan(&hir).describe()
     }
 
     fn pi(re: &str) -> String {
-        let hir = regex_syntax::ParserBuilder::new().case_insensitive(true).build().parse(re).unwrap();
+        let hir = regex_syntax::ParserBuilder::new()
+            .case_insensitive(true)
+            .build()
+            .parse(re)
+            .unwrap();
         plan(&hir).describe()
     }
 
@@ -453,13 +517,19 @@ mod tests {
 
     #[test]
     fn concat_across_wildcards() {
-        assert_eq!(p("hello.*world"), "(\"ell\" \"hel\" \"llo\" \"orl\" \"rld\" \"wor\")");
+        assert_eq!(
+            p("hello.*world"),
+            "(\"ell\" \"hel\" \"llo\" \"orl\" \"rld\" \"wor\")"
+        );
         assert_eq!(p(r"func\s+main"), "(\"ain\" \"fun\" \"mai\" \"unc\")");
     }
 
     #[test]
     fn optional_and_repeat() {
-        assert_eq!(p("colou?r"), "((\"col\" \"lor\" \"olo\")|(\"col\" \"lou\" \"olo\" \"our\"))");
+        assert_eq!(
+            p("colou?r"),
+            "((\"col\" \"lor\" \"olo\")|(\"col\" \"lou\" \"olo\" \"our\"))"
+        );
         // x+ keeps x's trigrams.
         assert_eq!(p("(abc)+"), "\"abc\"");
         assert_eq!(p("(abc)*"), "ALL");

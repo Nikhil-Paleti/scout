@@ -217,7 +217,11 @@ impl Rules {
                 if last {
                     return Verdict::Excluded(why);
                 }
-                let dir_rel = cur.strip_prefix(&self.root).unwrap_or(&cur).display().to_string();
+                let dir_rel = cur
+                    .strip_prefix(&self.root)
+                    .unwrap_or(&cur)
+                    .display()
+                    .to_string();
                 return Verdict::Excluded(format!("directory {}/ is excluded by {}", dir_rel, why));
             }
         }
@@ -250,7 +254,13 @@ mod tests {
         for e in rules.walker(1).build() {
             let e = e.unwrap();
             if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                out.insert(e.path().strip_prefix(rules.root()).unwrap().display().to_string());
+                out.insert(
+                    e.path()
+                        .strip_prefix(rules.root())
+                        .unwrap()
+                        .display()
+                        .to_string(),
+                );
             }
         }
         out
@@ -311,7 +321,12 @@ mod tests {
         ];
         for rel in all {
             let included = rules.check(Path::new(rel), false).is_included();
-            assert_eq!(included, expected.contains(rel), "check disagrees with walker on {}", rel);
+            assert_eq!(
+                included,
+                expected.contains(rel),
+                "check disagrees with walker on {}",
+                rel
+            );
         }
         match rules.check(Path::new("build/out.rs"), false) {
             Verdict::Excluded(why) => assert!(why.contains("build/"), "{}", why),

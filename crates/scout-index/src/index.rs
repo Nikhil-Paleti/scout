@@ -14,8 +14,8 @@ use crate::manifest::{self, Manifest, SegmentInfo};
 use crate::rules::Rules;
 use crate::segment::{FileMeta, Segment, SegmentWriter};
 use crate::symfile::{sym_path, SymBuilder, SymFile};
-use scout_symbols::Sym;
 use crate::trigram::Extractor;
+use scout_symbols::Sym;
 
 pub struct LoadedSegment {
     pub info: SegmentInfo,
@@ -75,10 +75,23 @@ impl Index {
                 Some(d) => load_del(dir, d)?,
                 None => RoaringBitmap::new(),
             };
-            let syms = if info.syms { Some(SymFile::open(&dir.join(info.sym_name()))?) } else { None };
-            segments.push(LoadedSegment { info: info.clone(), seg, del, syms });
+            let syms = if info.syms {
+                Some(SymFile::open(&dir.join(info.sym_name()))?)
+            } else {
+                None
+            };
+            segments.push(LoadedSegment {
+                info: info.clone(),
+                seg,
+                del,
+                syms,
+            });
         }
-        Ok(Index { dir: dir.to_path_buf(), manifest, segments })
+        Ok(Index {
+            dir: dir.to_path_buf(),
+            manifest,
+            segments,
+        })
     }
 
     /// Finds the live copy of `rel`, searching newest segments first.
@@ -95,23 +108,30 @@ impl Index {
 
     pub fn live_files(&self) -> impl Iterator<Item = LiveFile<'_>> {
         self.segments.iter().enumerate().flat_map(|(si, s)| {
-            (0..s.seg.num_files()).filter(move |&id| s.is_live(id)).map(move |id| LiveFile {
-                seg: si,
-                id,
-                path: s.seg.path(id),
-                meta: s.seg.meta(id),
-            })
+            (0..s.seg.num_files())
+                .filter(move |&id| s.is_live(id))
+                .map(move |id| LiveFile {
+                    seg: si,
+                    id,
+                    path: s.seg.path(id),
+                    meta: s.seg.meta(id),
+                })
         })
     }
 
     pub fn live_count(&self) -> u64 {
-        self.segments.iter().map(|s| s.seg.num_files() as u64 - s.del.len()).sum()
+        self.segments
+            .iter()
+            .map(|s| s.seg.num_files() as u64 - s.del.len())
+            .sum()
     }
 
     pub fn disk_bytes(&self) -> u64 {
         self.segments
             .iter()
-            .map(|s| s.seg.byte_len() as u64 + s.syms.as_ref().map(|y| y.byte_len() as u64).unwrap_or(0))
+            .map(|s| {
+                s.seg.byte_len() as u64 + s.syms.as_ref().map(|y| y.byte_len() as u64).unwrap_or(0)
+            })
             .sum()
     }
 
@@ -162,7 +182,9 @@ pub fn apply_changes(
         let md = fs::symlink_metadata(&abs).ok().filter(|m| m.is_file());
         let mut keep: Option<(FileMeta, Vec<u32>, Vec<Sym>)> = None;
         if let Some(md) = &md {
-            if rules.check(rel, false).is_included() && filter::check_size(md.len(), max_file_size).is_none() {
+            if rules.check(rel, false).is_included()
+                && filter::check_size(md.len(), max_file_size).is_none()
+            {
                 if let Some((si, id)) = current {
                     let m = index.segments[si].seg.meta(id);
                     if m.size == md.len() && m.mtime_ns == crate::segment::mtime_ns(md) {
@@ -170,8 +192,12 @@ pub fn apply_changes(
                         continue;
                     }
                 }
-                if let Ok(Extracted::Indexed { meta, trigrams, syms, .. }) =
-                    read_and_extract(&abs, max_file_size, &mut ex, symbols)
+                if let Ok(Extracted::Indexed {
+                    meta,
+                    trigrams,
+                    syms,
+                    ..
+                }) = read_and_extract(&abs, max_file_size, &mut ex, symbols)
                 {
                     if let Some((si, id)) = current {
                         if index.segments[si].seg.meta(id).hash == meta.hash {
@@ -196,7 +222,12 @@ pub fn apply_changes(
         match keep {
             Some((meta, tris, syms)) => {
                 stats.indexed += 1;
-                new_files.push(NewFile { path: rel_bytes, meta, trigrams: tris, syms });
+                new_files.push(NewFile {
+                    path: rel_bytes,
+                    meta,
+                    trigrams: tris,
+                    syms,
+                });
             }
             None => {
                 if current.is_some() {
@@ -220,12 +251,21 @@ pub fn apply_changes(
     if !new_files.is_empty() {
         let name = manifest.alloc_segment_name();
         write_small_segment(&dir.join(&name), &new_files, symbols)?;
-        manifest.segments.push(SegmentInfo::new(name.clone(), new_files.len() as u32, "delta", symbols));
+        manifest.segments.push(SegmentInfo::new(
+            name.clone(),
+            new_files.len() as u32,
+            "delta",
+            symbols,
+        ));
         stats.segment = Some(name);
     }
     for (si, t) in touched.iter().enumerate() {
         if *t {
-            let base = index.segments[si].info.name.trim_end_matches(".idx").to_string();
+            let base = index.segments[si]
+                .info
+                .name
+                .trim_end_matches(".idx")
+                .to_string();
             let name = format!("{}.del-{:06}", base, gen);
             store_del(dir, &name, &tomb[si])?;
             manifest.segments[si].del = Some(name);
@@ -262,7 +302,11 @@ pub fn write_small_segment(path: &Path, files: &[NewFile], symbols: bool) -> Res
     for (new_id, &i) in order.iter().enumerate() {
         let f = &files[i];
         w.add_file(&f.path, f.meta);
-        pairs.extend(f.trigrams.iter().map(|&t| ((t as u64) << 32) | new_id as u64));
+        pairs.extend(
+            f.trigrams
+                .iter()
+                .map(|&t| ((t as u64) << 32) | new_id as u64),
+        );
         if symbols {
             sb.add(new_id as u32, &f.syms);
         }

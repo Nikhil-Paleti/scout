@@ -8,9 +8,16 @@ fn syms(path: &str, src: &str) -> Vec<(String, &'static str, u32, Option<String>
         .collect()
 }
 
-fn has(v: &[(String, &'static str, u32, Option<String>)], name: &str, kind: &str, line: u32, container: Option<&str>) {
+fn has(
+    v: &[(String, &'static str, u32, Option<String>)],
+    name: &str,
+    kind: &str,
+    line: u32,
+    container: Option<&str>,
+) {
     assert!(
-        v.iter().any(|(n, k, l, c)| n == name && *k == kind && *l == line && c.as_deref() == container),
+        v.iter()
+            .any(|(n, k, l, c)| n == name && *k == kind && *l == line && c.as_deref() == container),
         "missing {name} {kind} {line} {container:?} in {v:#?}"
     );
 }
@@ -80,10 +87,22 @@ fn cpp() {
 
 #[test]
 fn header_detection() {
-    assert_eq!(Lang::detect(b"x/a.h", b"struct s { int new; };"), Some(Lang::C));
+    assert_eq!(
+        Lang::detect(b"x/a.h", b"struct s { int new; };"),
+        Some(Lang::C)
+    );
     assert_eq!(Lang::detect(b"x/a.h", b"namespace a { }"), Some(Lang::Cpp));
-    assert_eq!(Lang::detect(b"x/a.h", b"struct pid_namespace *ns;\nasm(\"\" ::: \"memory\");"), Some(Lang::C));
-    assert_eq!(Lang::detect(b"x/a.h", b"#include <vector>\n"), Some(Lang::Cpp));
+    assert_eq!(
+        Lang::detect(
+            b"x/a.h",
+            b"struct pid_namespace *ns;\nasm(\"\" ::: \"memory\");"
+        ),
+        Some(Lang::C)
+    );
+    assert_eq!(
+        Lang::detect(b"x/a.h", b"#include <vector>\n"),
+        Some(Lang::Cpp)
+    );
     assert_eq!(Lang::detect(b"pkg/BUILD.bazel", b""), Some(Lang::Starlark));
     assert_eq!(Lang::detect(b"README", b""), None);
 }
@@ -227,7 +246,10 @@ fn javascript_and_typescript() {
     has(&v, "calc", "call", 4, Some("area"));
     has(&v, "calc", "function", 5, None);
 
-    let v = syms("a.tsx", "function App() { return <div>{render()}</div>; }\n");
+    let v = syms(
+        "a.tsx",
+        "function App() { return <div>{render()}</div>; }\n",
+    );
     has(&v, "App", "function", 1, None);
     has(&v, "render", "call", 1, Some("App"));
 }

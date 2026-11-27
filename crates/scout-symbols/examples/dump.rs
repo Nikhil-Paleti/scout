@@ -9,7 +9,14 @@ fn main() {
     eprintln!("{} syms in {:.1?}", syms.len(), t.elapsed());
     for s in syms {
         if a.get(1).map(|n| *n == s.name).unwrap_or(true) {
-            println!("{}:{} {} {} {:?}", s.line, s.col, s.kind.name(), s.name, s.container);
+            println!(
+                "{}:{} {} {} {:?}",
+                s.line,
+                s.col,
+                s.kind.name(),
+                s.name,
+                s.container
+            );
         }
     }
 }

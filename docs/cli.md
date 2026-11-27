@@ -1,11 +1,11 @@
 # CLI
 
-Quote the query. Put `--` before a query that starts with `-`.
+Plain terms need no quotes: `scout calls launch -file:test`. Quote anything the shell would change, like `"exact"` phrases or `|`. A `-term` is an exclusion unless it is a flag below; put `--` before a query that starts with one.
 
 | Command | Does |
 |---|---|
 | `scout QUERY` | search ([syntax](syntax.md)) |
-| `scout files [QUERY]` | file names: fuzzy words, or a path regex |
+| `scout files [QUERY]` | file names: fuzzy words, or a path regex; `-term` drops matching paths |
 | `scout sym NAME [FILTERS]` | definitions, same as `scout 'sym:NAME'` |
 | `scout calls NAME [FILTERS]` | call sites, same as `scout 'calls:NAME'` |
 | `scout refs NAME [FILTERS]` | whole-word uses |

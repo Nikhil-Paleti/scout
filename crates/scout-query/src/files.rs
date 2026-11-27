@@ -1,7 +1,8 @@
 //! `scout files QUERY`: file-name search. A query with regex syntax is a
 //! regex over the path; otherwise each word is a fuzzy subsequence (fzf
 //! style), scored for consecutive letters, word starts and hits in the base
-//! name.
+//! name. A `-term` (or `-file:term`) word drops paths that match `term` as a
+//! case-insensitive regex, as it does in a code search.
 
 use anyhow::{Context, Result};
 use grep_matcher::Matcher;
@@ -19,7 +20,12 @@ pub struct FileMatch {
 /// Whether `q` reads as a regex rather than fuzzy words. A lone `.` is
 /// common in file names, so it doesn't count.
 pub fn is_regex(q: &str) -> bool {
-    q.chars().any(|c| matches!(c, '\\' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'))
+    q.chars().any(|c| {
+        matches!(
+            c,
+            '\\' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+        )
+    })
 }
 
 fn boundary(prev: u8, cur: u8) -> i64 {
@@ -59,7 +65,13 @@ fn score_positions(path: &[u8], pos: &[usize], base_start: usize) -> i64 {
 /// fzf v1: leftmost forward match to find where the word ends, then
 /// backward from there for the tightest window.
 fn fuzzy_in(hay: &[u8], word: &[u8], from: usize, sensitive: bool) -> Option<Vec<usize>> {
-    let eq = |a: u8, b: u8| if sensitive { a == b } else { a.eq_ignore_ascii_case(&b) };
+    let eq = |a: u8, b: u8| {
+        if sensitive {
+            a == b
+        } else {
+            a.eq_ignore_ascii_case(&b)
+        }
+    };
     let mut wi = 0;
     let mut end = None;
     for (i, &b) in hay.iter().enumerate().skip(from) {
@@ -97,7 +109,11 @@ fn fuzzy_word(path: &[u8], word: &str, base_start: usize) -> Option<(i64, Vec<us
             if pos[0] == base_start && pos.windows(2).all(|x| x[1] == x[0] + 1) {
                 s += 40;
                 // The whole stem (`dev` for dev.c) beats a prefix of it.
-                let stem_end = path[base_start..].iter().position(|&b| b == b'.').map(|i| base_start + i).unwrap_or(path.len());
+                let stem_end = path[base_start..]
+                    .iter()
+                    .position(|&b| b == b'.')
+                    .map(|i| base_start + i)
+                    .unwrap_or(path.len());
                 if pos.last().map(|&l| l + 1) == Some(stem_end) {
                     s += 30;
                 }
@@ -127,10 +143,86 @@ pub fn fuzzy(path: &str, words: &[&str]) -> Option<(i64, Vec<usize>)> {
 }
 
 /// Matches `paths` against `query`, best first, at most `limit`.
-pub fn find(paths: &[String], query: &str, near: Option<&str>, limit: usize) -> Result<Vec<FileMatch>> {
-    let q = query.trim();
+/// Splits `-term` words off a query: the rest of the query, and a matcher
+/// for paths to drop.
+fn exclusions(query: &str) -> Result<(String, Option<grep_regex::RegexMatcher>)> {
+    let mut keep = Vec::new();
+    let mut drop = Vec::new();
+    for w in query.split_whitespace() {
+        match w.strip_prefix('-') {
+            Some(t) if !t.is_empty() => {
+                let t = t.strip_prefix("file:").unwrap_or(t);
+                if !t.is_empty() {
+                    drop.push(t);
+                }
+            }
+            _ => keep.push(w),
+        }
+    }
+    if drop.is_empty() {
+        return Ok((query.to_string(), None));
+    }
+    let alts: Vec<String> = drop
+        .iter()
+        .map(|t| {
+            if regex_ok(t) {
+                format!("(?:{})", t)
+            } else {
+                regex_escape(t)
+            }
+        })
+        .collect();
+    let m = RegexMatcherBuilder::new()
+        .case_insensitive(true)
+        .build(&alts.join("|"))
+        .with_context(|| format!("invalid exclusion in `{}`", query))?;
+    Ok((keep.join(" "), Some(m)))
+}
+
+fn regex_ok(t: &str) -> bool {
+    RegexMatcherBuilder::new().build(t).is_ok()
+}
+
+fn regex_escape(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    for c in t.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+pub fn find(
+    paths: &[String],
+    query: &str,
+    near: Option<&str>,
+    limit: usize,
+) -> Result<Vec<FileMatch>> {
+    let (rest, drop) = exclusions(query)?;
+    let kept: Vec<String>;
+    let paths: &[String] = match &drop {
+        Some(m) => {
+            kept = paths
+                .iter()
+                .filter(|p| !m.is_match(p.as_bytes()).unwrap_or(false))
+                .cloned()
+                .collect();
+            &kept
+        }
+        None => paths,
+    };
+    let q = rest.trim();
     let mut out: Vec<FileMatch> = if q.is_empty() {
-        paths.iter().map(|p| FileMatch { path: p.clone(), score: 0, positions: Vec::new() }).collect()
+        paths
+            .iter()
+            .map(|p| FileMatch {
+                path: p.clone(),
+                score: 0,
+                positions: Vec::new(),
+            })
+            .collect()
     } else if is_regex(q) {
         let m = RegexMatcherBuilder::new()
             .case_smart(true)
@@ -145,7 +237,11 @@ pub fn find(paths: &[String], query: &str, near: Option<&str>, limit: usize) -> 
                 if mt.start() >= base_start {
                     score += 50;
                 }
-                Some(FileMatch { path: p.clone(), score, positions: (mt.start()..mt.end()).collect() })
+                Some(FileMatch {
+                    path: p.clone(),
+                    score,
+                    positions: (mt.start()..mt.end()).collect(),
+                })
             })
             .collect()
     } else {
@@ -154,7 +250,11 @@ pub fn find(paths: &[String], query: &str, near: Option<&str>, limit: usize) -> 
             .par_iter()
             .filter_map(|p| {
                 let (s, pos) = fuzzy(p, &words)?;
-                Some(FileMatch { path: p.clone(), score: s - p.len() as i64 / 4, positions: pos })
+                Some(FileMatch {
+                    path: p.clone(),
+                    score: s - p.len() as i64 / 4,
+                    positions: pos,
+                })
             })
             .collect()
     };
@@ -163,7 +263,12 @@ pub fn find(paths: &[String], query: &str, near: Option<&str>, limit: usize) -> 
             m.score -= (crate::path_rank(&m.path, near) as i64 - 1000) * 2;
         }
     }
-    out.sort_by(|a, b| b.score.cmp(&a.score).then(a.path.len().cmp(&b.path.len())).then_with(|| a.path.cmp(&b.path)));
+    out.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then(a.path.len().cmp(&b.path.len()))
+            .then_with(|| a.path.cmp(&b.path))
+    });
     if q.is_empty() {
         out.sort_by(|a, b| a.path.cmp(&b.path));
     }
@@ -177,7 +282,11 @@ mod tests {
 
     fn top(paths: &[&str], q: &str) -> Vec<String> {
         let v: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
-        find(&v, q, None, 10).unwrap().into_iter().map(|m| m.path).collect()
+        find(&v, q, None, 10)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.path)
+            .collect()
     }
 
     #[test]
@@ -198,6 +307,19 @@ mod tests {
         // Regex mode.
         assert_eq!(top(&paths, r"\.md$"), vec!["docs/readme.md"]);
         assert_eq!(top(&paths, "").len(), 5);
+        // Exclusions.
+        let with = top(&paths, "main");
+        let without = top(&paths, "main -test");
+        assert!(with.contains(&"lib/mail/main_test.go".to_string()));
+        assert!(!without.contains(&"lib/mail/main_test.go".to_string()));
+        assert_eq!(without.len(), with.len() - 1);
+        assert_eq!(
+            top(&paths, "main -file:test -vendor -domain"),
+            vec!["src/main.rs"]
+        );
+        assert_eq!(top(&paths, r"\.rs$ -file:^vendor/").len(), 2);
+        assert_eq!(top(&paths, "-file:src").len(), 3);
+        assert_eq!(top(&paths, "main -[x"), top(&paths, "main"));
         let m = fuzzy("src/main.rs", &["mrs"]).unwrap();
         assert_eq!(m.1, vec![4, 9, 10]);
     }

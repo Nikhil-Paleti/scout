@@ -15,8 +15,8 @@
 //! file and line. `container` is a name id (the enclosing function of a call)
 //! or u32::MAX.
 
-use std::collections::{BinaryHeap, HashMap};
 use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap};
 use std::fs::{self, File};
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -127,7 +127,11 @@ impl Writer {
     fn finish(mut self) -> Result<()> {
         let nnames = self.name_offs.len() as u32 - 1;
         if self.rec_starts.len() as u32 != nnames {
-            bail!("sym writer: {} record groups for {} names", self.rec_starts.len(), nnames);
+            bail!(
+                "sym writer: {} record groups for {} names",
+                self.rec_starts.len(),
+                nnames
+            );
         }
         self.rec_starts.push(self.nrecs);
         let off_rec_starts = self.pos;
@@ -183,9 +187,14 @@ impl SymBuilder {
     pub fn add(&mut self, file: u32, syms: &[Sym]) {
         for s in syms {
             let name = self.intern(&s.name);
-            let container = s.container.as_deref().map(|c| self.intern(c)).unwrap_or(NONE);
+            let container = s
+                .container
+                .as_deref()
+                .map(|c| self.intern(c))
+                .unwrap_or(NONE);
             let line = s.line.min(MAX_LINE);
-            self.recs.push([name, file, line << 8 | s.kind as u32, container]);
+            self.recs
+                .push([name, file, line << 8 | s.kind as u32, container]);
         }
     }
 
@@ -219,7 +228,8 @@ impl SymBuilder {
                 r[3] = remap[r[3] as usize];
             }
         }
-        self.recs.sort_unstable_by_key(|r| (r[0], sort_key(&[r[1], r[2], r[3]])));
+        self.recs
+            .sort_unstable_by_key(|r| (r[0], sort_key(&[r[1], r[2], r[3]])));
         let mut w = Writer::create(out)?;
         for &old in &order {
             w.add_name(&self.names[old as usize])?;
@@ -328,7 +338,11 @@ impl SymFile {
 
     fn raw(&self, r: u32) -> [u32; 3] {
         let o = self.off_recs + REC * r as usize;
-        [u32_at(&self.map, o), u32_at(&self.map, o + 4), u32_at(&self.map, o + 8)]
+        [
+            u32_at(&self.map, o),
+            u32_at(&self.map, o + 4),
+            u32_at(&self.map, o + 8),
+        ]
     }
 
     fn rec_range(&self, name: u32) -> (u32, u32) {
@@ -364,7 +378,10 @@ pub struct SymMergeInput<'a> {
 pub fn merge_syms(inputs: &[SymMergeInput], out: &Path) -> Result<()> {
     let mut w = Writer::create(out)?;
     // Pass 1: union of names. name_map[i][old] = new.
-    let mut name_map: Vec<Vec<u32>> = inputs.iter().map(|i| vec![NONE; i.syms.num_names() as usize]).collect();
+    let mut name_map: Vec<Vec<u32>> = inputs
+        .iter()
+        .map(|i| vec![NONE; i.syms.num_names() as usize])
+        .collect();
     // For pass 2: which (input, old id) pairs carry each new id, in order.
     let mut sources: Vec<(u32, u32, u32)> = Vec::new(); // (new, input, old)
     let mut heap: BinaryHeap<Reverse<(&[u8], usize, u32)>> = BinaryHeap::new();
@@ -408,7 +425,11 @@ pub fn merge_syms(inputs: &[SymMergeInput], out: &Path) -> Result<()> {
                 if nf == NONE {
                     continue;
                 }
-                let nc = if c == NONE { NONE } else { name_map[ii as usize][c as usize] };
+                let nc = if c == NONE {
+                    NONE
+                } else {
+                    name_map[ii as usize][c as usize]
+                };
                 group.push([nf, lk, nc]);
             }
             if group.len() > before {
@@ -429,7 +450,13 @@ mod tests {
     use super::*;
 
     fn sym(name: &str, kind: Kind, line: u32, container: Option<&str>) -> Sym {
-        Sym { name: name.into(), kind, line, col: 0, container: container.map(Into::into) }
+        Sym {
+            name: name.into(),
+            kind,
+            line,
+            col: 0,
+            container: container.map(Into::into),
+        }
     }
 
     fn dump(f: &SymFile) -> Vec<(String, u32, u32, &'static str, Option<String>)> {
@@ -441,7 +468,8 @@ mod tests {
                     r.file,
                     r.line,
                     r.kind.name(),
-                    r.container.map(|c| String::from_utf8_lossy(f.name(c)).into_owned()),
+                    r.container
+                        .map(|c| String::from_utf8_lossy(f.name(c)).into_owned()),
                 ));
             }
         }
@@ -453,7 +481,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.sym");
         let mut b = SymBuilder::new();
-        b.add(0, &[sym("main", Kind::Function, 1, None), sym("helper", Kind::Call, 2, Some("main"))]);
+        b.add(
+            0,
+            &[
+                sym("main", Kind::Function, 1, None),
+                sym("helper", Kind::Call, 2, Some("main")),
+            ],
+        );
         b.add(1, &[sym("helper", Kind::Function, 5, None)]);
         b.write(&a).unwrap();
         let fa = SymFile::open(&a).unwrap();
@@ -471,14 +505,29 @@ mod tests {
 
         let c = dir.path().join("c.sym");
         let mut b = SymBuilder::new();
-        b.add(0, &[sym("zed", Kind::Call, 9, Some("helper")), sym("helper", Kind::Function, 3, None)]);
+        b.add(
+            0,
+            &[
+                sym("zed", Kind::Call, 9, Some("helper")),
+                sym("helper", Kind::Function, 3, None),
+            ],
+        );
         b.write(&c).unwrap();
         let fc = SymFile::open(&c).unwrap();
 
         // a's file 0 is dropped, file 1 becomes 0; c's file 0 becomes 1.
         let out = dir.path().join("m.sym");
         merge_syms(
-            &[SymMergeInput { syms: &fa, remap: &[NONE, 0] }, SymMergeInput { syms: &fc, remap: &[1] }],
+            &[
+                SymMergeInput {
+                    syms: &fa,
+                    remap: &[NONE, 0],
+                },
+                SymMergeInput {
+                    syms: &fc,
+                    remap: &[1],
+                },
+            ],
             &out,
         )
         .unwrap();

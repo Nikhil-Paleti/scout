@@ -102,7 +102,12 @@ impl Parsed {
     /// A whole query taken as one regex, no syntax.
     pub fn raw(query: &str) -> Parsed {
         Parsed {
-            terms: vec![Term { kind: TermKind::Text, pattern: query.to_string(), case: None, literal: false }],
+            terms: vec![Term {
+                kind: TermKind::Text,
+                pattern: query.to_string(),
+                case: None,
+                literal: false,
+            }],
             expr: Expr::Term(0),
             ..Default::default()
         }
@@ -133,13 +138,23 @@ impl Parsed {
 /// `Foo::bar`, `Foo.bar` and `Foo#bar` name `bar`; symbols are stored by
 /// their last component.
 fn last_component(v: &str) -> &str {
-    let cut = [v.rfind("::").map(|i| i + 2), v.rfind('.').map(|i| i + 1), v.rfind('#').map(|i| i + 1)]
-        .into_iter()
-        .flatten()
-        .max();
+    let cut = [
+        v.rfind("::").map(|i| i + 2),
+        v.rfind('.').map(|i| i + 1),
+        v.rfind('#').map(|i| i + 1),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
     match cut {
         // Keep regex-looking values (`a.b`, `foo.*`) intact.
-        Some(i) if i < v.len() && v[i..].chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !v.contains('*') => {
+        Some(i)
+            if i < v.len()
+                && v[i..]
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                && !v.contains('*') =>
+        {
             &v[i..]
         }
         _ => v,
@@ -151,7 +166,9 @@ fn last_component(v: &str) -> &str {
 pub fn lang_regex(lang: &str) -> Option<String> {
     let exts: &[&str] = match lang.to_ascii_lowercase().as_str() {
         "c" => &["c", "h"],
-        "cpp" | "c++" | "cxx" | "cc" => &["cc", "cpp", "cxx", "c\\+\\+", "hh", "hpp", "hxx", "h", "inl", "ipp"],
+        "cpp" | "c++" | "cxx" | "cc" => &[
+            "cc", "cpp", "cxx", "c\\+\\+", "hh", "hpp", "hxx", "h", "inl", "ipp",
+        ],
         "cuda" | "cu" => &["cu", "cuh"],
         "go" | "golang" => &["go"],
         "rust" | "rs" => &["rs"],
@@ -168,7 +185,10 @@ pub fn lang_regex(lang: &str) -> Option<String> {
         "toml" => &["toml"],
         "proto" | "protobuf" => &["proto"],
         "bazel" | "bzl" | "starlark" => {
-            return Some(r"(^|/)(BUILD|BUILD\.bazel|WORKSPACE|WORKSPACE\.bazel|MODULE\.bazel)$|\.bzl$".into())
+            return Some(
+                r"(^|/)(BUILD|BUILD\.bazel|WORKSPACE|WORKSPACE\.bazel|MODULE\.bazel)$|\.bzl$"
+                    .into(),
+            )
         }
         "cmake" => return Some(r"(^|/)CMakeLists\.txt$|\.cmake$".into()),
         "make" | "makefile" => return Some(r"(^|/)(GNUmakefile|Makefile|makefile)$|\.mk$".into()),
@@ -208,12 +228,17 @@ enum Tok {
     Neg,
     /// `key` is a recognised filter name; `quoted` means the value was in
     /// double quotes.
-    Atom { key: Option<String>, value: String, quoted: bool },
+    Atom {
+        key: Option<String>,
+        value: String,
+        quoted: bool,
+    },
 }
 
 const KEYS: &[&str] = &[
-    "file", "filepath", "path", "f", "lang", "language", "l", "case", "content", "comment", "usage", "pcre", "sym",
-    "s", "symbol", "function", "func", "class", "calls", "callers", "c", "refs", "ref", "r", "kind", "k",
+    "file", "filepath", "path", "f", "lang", "language", "l", "case", "content", "comment",
+    "usage", "pcre", "sym", "s", "symbol", "function", "func", "class", "calls", "callers", "c",
+    "refs", "ref", "r", "kind", "k",
 ];
 
 /// Reads a double-quoted literal starting after the opening quote. `\"` and
@@ -263,7 +288,11 @@ fn tokenize(q: &str) -> Result<Vec<Tok>> {
         if c == '"' {
             i += 1;
             let s = quoted(&chars, &mut i)?;
-            out.push(Tok::Atom { key: None, value: s, quoted: true });
+            out.push(Tok::Atom {
+                key: None,
+                value: s,
+                quoted: true,
+            });
             continue;
         }
         // A word: up to whitespace, or a `)` that isn't closing a `(` inside
@@ -288,7 +317,11 @@ fn tokenize(q: &str) -> Result<Vec<Tok>> {
                 if chars.get(i) == Some(&'"') {
                     i += 1;
                     let v = quoted(&chars, &mut i)?;
-                    out.push(Tok::Atom { key: key.take(), value: v, quoted: true });
+                    out.push(Tok::Atom {
+                        key: key.take(),
+                        value: v,
+                        quoted: true,
+                    });
                     word.clear();
                     break;
                 }
@@ -303,13 +336,25 @@ fn tokenize(q: &str) -> Result<Vec<Tok>> {
             i += 1;
         }
         match key {
-            Some(k) if !word.is_empty() => out.push(Tok::Atom { key: Some(k), value: word, quoted: false }),
+            Some(k) if !word.is_empty() => out.push(Tok::Atom {
+                key: Some(k),
+                value: word,
+                quoted: false,
+            }),
             // `file:` with nothing after it is just text.
-            Some(k) => out.push(Tok::Atom { key: None, value: format!("{}:", k), quoted: false }),
+            Some(k) => out.push(Tok::Atom {
+                key: None,
+                value: format!("{}:", k),
+                quoted: false,
+            }),
             None if word == "OR" => out.push(Tok::Or),
             None if word == "AND" => out.push(Tok::And),
             None if word.is_empty() => {}
-            None => out.push(Tok::Atom { key: None, value: word, quoted: false }),
+            None => out.push(Tok::Atom {
+                key: None,
+                value: word,
+                quoted: false,
+            }),
         }
     }
     Ok(out)
@@ -319,11 +364,19 @@ fn tokenize(q: &str) -> Result<Vec<Tok>> {
 /// because `case:` anywhere in a group applies to the whole group.
 enum Raw {
     True,
-    Leaf { kind: TermKind, pattern: String, literal: bool, force_case: Option<Case> },
+    Leaf {
+        kind: TermKind,
+        pattern: String,
+        literal: bool,
+        force_case: Option<Case>,
+    },
     Not(Box<Raw>),
     And(Vec<Raw>),
     Or(Vec<Raw>),
-    Group { case: Option<Case>, body: Box<Raw> },
+    Group {
+        case: Option<Case>,
+        body: Box<Raw>,
+    },
 }
 
 struct Parser {
@@ -384,15 +437,27 @@ impl Parser {
         if xs.is_empty() {
             bail!("empty query or group");
         }
-        Ok(if xs.len() == 1 { xs.pop().unwrap() } else { Raw::And(xs) })
+        Ok(if xs.len() == 1 {
+            xs.pop().unwrap()
+        } else {
+            Raw::And(xs)
+        })
     }
 
     fn unary(&mut self) -> Result<Raw> {
         match self.peek().cloned() {
             Some(Tok::Neg) => {
                 self.pos += 1;
-                if matches!(self.peek(), None | Some(Tok::RParen) | Some(Tok::Or) | Some(Tok::And)) {
-                    return Ok(Raw::Leaf { kind: TermKind::Text, pattern: "-".into(), literal: true, force_case: None });
+                if matches!(
+                    self.peek(),
+                    None | Some(Tok::RParen) | Some(Tok::Or) | Some(Tok::And)
+                ) {
+                    return Ok(Raw::Leaf {
+                        kind: TermKind::Text,
+                        pattern: "-".into(),
+                        literal: true,
+                        force_case: None,
+                    });
                 }
                 self.neg += 1;
                 let x = self.unary();
@@ -411,7 +476,10 @@ impl Parser {
                     bail!("missing `)`");
                 }
                 self.pos += 1;
-                Ok(Raw::Group { case, body: Box::new(body) })
+                Ok(Raw::Group {
+                    case,
+                    body: Box::new(body),
+                })
             }
             Some(Tok::RParen) => bail!("unmatched `)`"),
             Some(Tok::Atom { key, value, quoted }) => {
@@ -421,20 +489,40 @@ impl Parser {
             Some(Tok::Or) | Some(Tok::And) => {
                 // A leading or doubled operator is literal text.
                 self.pos += 1;
-                let w = if self.toks[self.pos - 1] == Tok::Or { "OR" } else { "AND" };
-                Ok(Raw::Leaf { kind: TermKind::Text, pattern: w.into(), literal: true, force_case: None })
+                let w = if self.toks[self.pos - 1] == Tok::Or {
+                    "OR"
+                } else {
+                    "AND"
+                };
+                Ok(Raw::Leaf {
+                    kind: TermKind::Text,
+                    pattern: w.into(),
+                    literal: true,
+                    force_case: None,
+                })
             }
             None => bail!("unexpected end of query"),
         }
     }
 
     fn leaf(kind: TermKind, value: String, quoted: bool) -> Raw {
-        let pattern = if quoted { regex_syntax::escape(&value) } else { value };
-        Raw::Leaf { kind, pattern, literal: quoted, force_case: None }
+        let pattern = if quoted {
+            regex_syntax::escape(&value)
+        } else {
+            value
+        };
+        Raw::Leaf {
+            kind,
+            pattern,
+            literal: quoted,
+            force_case: None,
+        }
     }
 
     fn atom(&mut self, key: Option<&str>, value: String, quoted: bool) -> Result<Raw> {
-        let Some(key) = key else { return Ok(Self::leaf(TermKind::Text, value, quoted)) };
+        let Some(key) = key else {
+            return Ok(Self::leaf(TermKind::Text, value, quoted));
+        };
         let only_top = |p: &Parser, what: &str| -> Result<()> {
             if p.neg > 0 || p.in_or > 0 || p.depth > 0 {
                 bail!("{} can't be negated, grouped or used with OR", what);
@@ -444,8 +532,15 @@ impl Parser {
         Ok(match key {
             "file" | "filepath" | "path" | "f" => Self::leaf(TermKind::Path, value, quoted),
             "lang" | "language" | "l" => {
-                let Some(re) = lang_regex(&value) else { bail!("unknown language `{}`", value) };
-                Raw::Leaf { kind: TermKind::Path, pattern: re, literal: false, force_case: Some(Case::Sensitive) }
+                let Some(re) = lang_regex(&value) else {
+                    bail!("unknown language `{}`", value)
+                };
+                Raw::Leaf {
+                    kind: TermKind::Path,
+                    pattern: re,
+                    literal: false,
+                    force_case: Some(Case::Sensitive),
+                }
             }
             "content" => Self::leaf(TermKind::Content, value, quoted),
             "comment" => Self::leaf(TermKind::Comment, value, quoted),
@@ -482,13 +577,21 @@ impl Parser {
                 if self.sym.is_some() {
                     bail!("use one symbol filter (sym:, function:, class: or calls:) per query");
                 }
-                self.sym = Some(if matches!(key, "calls" | "callers" | "c") { SymMode::Calls } else { SymMode::Defs });
+                self.sym = Some(if matches!(key, "calls" | "callers" | "c") {
+                    SymMode::Calls
+                } else {
+                    SymMode::Defs
+                });
                 match key {
                     "function" | "func" => self.sym_kinds.push("function".into()),
                     "class" => self.sym_kinds.push("class".into()),
                     _ => {}
                 }
-                self.name = if quoted { regex_syntax::escape(&value) } else { last_component(&value).to_string() };
+                self.name = if quoted {
+                    regex_syntax::escape(&value)
+                } else {
+                    last_component(&value).to_string()
+                };
                 Raw::True
             }
             "refs" | "ref" | "r" => {
@@ -508,11 +611,25 @@ impl Parser {
 fn lower(raw: Raw, case: Option<Case>, terms: &mut Vec<Term>) -> Expr {
     match raw {
         Raw::True => Expr::True,
-        Raw::Leaf { kind, pattern, literal, force_case } => {
+        Raw::Leaf {
+            kind,
+            pattern,
+            literal,
+            force_case,
+        } => {
             // An explicit case: wins over refs:'s default; lang: is always
             // exact (extensions).
-            let c = if kind == TermKind::Path && force_case.is_some() { force_case } else { case.or(force_case) };
-            terms.push(Term { kind, pattern, case: c, literal });
+            let c = if kind == TermKind::Path && force_case.is_some() {
+                force_case
+            } else {
+                case.or(force_case)
+            };
+            terms.push(Term {
+                kind,
+                pattern,
+                case: c,
+                literal,
+            });
             Expr::Term(terms.len() - 1)
         }
         Raw::Not(x) => match lower(*x, case, terms) {
@@ -521,7 +638,11 @@ fn lower(raw: Raw, case: Option<Case>, terms: &mut Vec<Term>) -> Expr {
         },
         Raw::Group { case: c, body } => lower(*body, c.or(case), terms),
         Raw::And(xs) => {
-            let mut v: Vec<Expr> = xs.into_iter().map(|x| lower(x, case, terms)).filter(|e| *e != Expr::True).collect();
+            let mut v: Vec<Expr> = xs
+                .into_iter()
+                .map(|x| lower(x, case, terms))
+                .filter(|e| *e != Expr::True)
+                .collect();
             match v.len() {
                 0 => Expr::True,
                 1 => v.pop().unwrap(),
@@ -574,7 +695,15 @@ pub fn parse(query: &str) -> Result<Parsed> {
     if p.sym.is_some() && p.name.is_empty() {
         bail!("sym: and calls: need a name");
     }
-    Ok(Parsed { terms, expr, pcre: p.pcre, case: top_case, sym: p.sym, name: p.name, kinds })
+    Ok(Parsed {
+        terms,
+        expr,
+        pcre: p.pcre,
+        case: top_case,
+        sym: p.sym,
+        name: p.name,
+        kinds,
+    })
 }
 
 #[cfg(test)]
@@ -582,7 +711,10 @@ mod tests {
     use super::*;
 
     fn pats(p: &Parsed) -> Vec<(TermKind, String)> {
-        p.terms.iter().map(|t| (t.kind, t.pattern.clone())).collect()
+        p.terms
+            .iter()
+            .map(|t| (t.kind, t.pattern.clone()))
+            .collect()
     }
 
     #[test]
@@ -618,16 +750,28 @@ mod tests {
         let p = parse("(hello OR world) AND lang:java").unwrap();
         assert_eq!(
             p.expr,
-            Expr::And(vec![Expr::Or(vec![Expr::Term(0), Expr::Term(1)]), Expr::Term(2)])
+            Expr::And(vec![
+                Expr::Or(vec![Expr::Term(0), Expr::Term(1)]),
+                Expr::Term(2)
+            ])
         );
         // OR binds looser than AND.
         let p = parse("a b OR c").unwrap();
-        assert_eq!(p.expr, Expr::Or(vec![Expr::And(vec![Expr::Term(0), Expr::Term(1)]), Expr::Term(2)]));
+        assert_eq!(
+            p.expr,
+            Expr::Or(vec![
+                Expr::And(vec![Expr::Term(0), Expr::Term(1)]),
+                Expr::Term(2)
+            ])
+        );
         let p = parse(r#""foo()" "a \"b\" c" main\.java f:main\.java"#).unwrap();
         assert_eq!(p.terms[0].pattern, r"foo\(\)");
         assert_eq!(p.terms[1].pattern, regex_syntax::escape(r#"a "b" c"#));
         assert_eq!(p.terms[2].pattern, r"main\.java");
-        assert_eq!((p.terms[3].kind, p.terms[3].pattern.as_str()), (TermKind::Path, r"main\.java"));
+        assert_eq!(
+            (p.terms[3].kind, p.terms[3].pattern.as_str()),
+            (TermKind::Path, r"main\.java")
+        );
         // Parens inside a word stay regex; `(?i)` isn't a group.
         let p = parse("foo(bar|baz) (?i)x").unwrap();
         assert_eq!(p.terms[0].pattern, "foo(bar|baz)");
@@ -635,7 +779,8 @@ mod tests {
         // Escaped space keeps one term.
         assert_eq!(parse(r"jobs:\ build").unwrap().terms.len(), 1);
         // Nested groups and case inheritance.
-        let p = parse("((Strings OR StringBuilder) AND lang:java case:yes) OR (std AND lang:cpp)").unwrap();
+        let p = parse("((Strings OR StringBuilder) AND lang:java case:yes) OR (std AND lang:cpp)")
+            .unwrap();
         assert_eq!(p.terms[0].case, Some(Case::Sensitive));
         assert_eq!(p.terms[3].case, None);
         assert!(parse("(a").is_err());
@@ -648,17 +793,36 @@ mod tests {
         for q in ["file:x", "filepath:x", "path:x", "f:x"] {
             assert_eq!(parse(q).unwrap().terms[0].kind, TermKind::Path);
         }
-        for q in ["lang:golang", "language:go", "lang:c++", "lang:objc", "lang:sh", "lang:kts"] {
+        for q in [
+            "lang:golang",
+            "language:go",
+            "lang:c++",
+            "lang:objc",
+            "lang:sh",
+            "lang:kts",
+        ] {
             assert_eq!(parse(q).unwrap().terms[0].kind, TermKind::Path, "{q}");
         }
         assert!(parse("lang:cobol").is_err());
-        assert_eq!(parse("content:main").unwrap().terms[0].kind, TermKind::Content);
-        assert_eq!(parse("comment:bug").unwrap().terms[0].kind, TermKind::Comment);
+        assert_eq!(
+            parse("content:main").unwrap().terms[0].kind,
+            TermKind::Content
+        );
+        assert_eq!(
+            parse("comment:bug").unwrap().terms[0].kind,
+            TermKind::Comment
+        );
         assert_eq!(parse("usage:map").unwrap().terms[0].kind, TermKind::Usage);
         assert!(parse("pcre:yes {\\s+x").unwrap().pcre);
-        assert_eq!(parse("case:y X").unwrap().terms[0].case, Some(Case::Sensitive));
+        assert_eq!(
+            parse("case:y X").unwrap().terms[0].case,
+            Some(Case::Sensitive)
+        );
         // Unknown keys are text.
-        assert_eq!(parse("std::vector").unwrap().terms[0].pattern, "std::vector");
+        assert_eq!(
+            parse("std::vector").unwrap().terms[0].pattern,
+            "std::vector"
+        );
         assert_eq!(parse("http://x").unwrap().terms[0].kind, TermKind::Text);
     }
 
@@ -674,9 +838,18 @@ mod tests {
         assert_eq!(p.terms[1].pattern, "GFP");
         assert_eq!(parse("sym:foo.*bar").unwrap().name, "foo.*bar");
         let p = parse("function:print").unwrap();
-        assert_eq!((p.sym, p.kinds.clone()), (Some(SymMode::Defs), vec!["function".to_string()]));
-        assert_eq!(parse("class:Main").unwrap().kinds, vec!["class".to_string()]);
-        assert_eq!(parse("symbol:immutable").unwrap().kinds, Vec::<String>::new());
+        assert_eq!(
+            (p.sym, p.kinds.clone()),
+            (Some(SymMode::Defs), vec!["function".to_string()])
+        );
+        assert_eq!(
+            parse("class:Main").unwrap().kinds,
+            vec!["class".to_string()]
+        );
+        assert_eq!(
+            parse("symbol:immutable").unwrap().kinds,
+            Vec::<String>::new()
+        );
         let p = parse("refs:self.run").unwrap();
         assert_eq!(p.terms[0].pattern, r"\brun\b");
         assert_eq!(p.terms[0].case, Some(Case::Sensitive));

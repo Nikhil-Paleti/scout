@@ -17,7 +17,10 @@ fn cost(seg: &Segment, q: &Q) -> u64 {
         Q::None => 0,
         Q::Tri(t) => seg.doc_count(*t) as u64,
         Q::And(xs) => xs.iter().map(|x| cost(seg, x)).min().unwrap_or(u64::MAX),
-        Q::Or(xs) => xs.iter().map(|x| cost(seg, x)).fold(0u64, |a, b| a.saturating_add(b)),
+        Q::Or(xs) => xs
+            .iter()
+            .map(|x| cost(seg, x))
+            .fold(0u64, |a, b| a.saturating_add(b)),
     }
 }
 

@@ -16,9 +16,9 @@ use anyhow::{bail, Context, Result};
 use serde_json::json;
 
 use args::Args;
+use output::{Format, Printer};
 use scout_index::manifest::{self, index_dir_for, Manifest};
 use scout_index::{build, filter, BuildOptions, Index, Rules, Verdict};
-use output::{Format, Printer};
 use scout_query::{Case, SearchOptions};
 
 const USAGE: &str = "\
@@ -87,7 +87,9 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let cmd = argv.remove(0);
-    let all: Vec<String> = std::iter::once(cmd.clone()).chain(argv.iter().cloned()).collect();
+    let all: Vec<String> = std::iter::once(cmd.clone())
+        .chain(argv.iter().cloned())
+        .collect();
     let args = Args::new(argv);
     let r = match cmd.as_str() {
         "build" => cmd_build(args),
@@ -122,8 +124,11 @@ fn main() -> ExitCode {
 }
 
 fn is_broken_pipe(e: &anyhow::Error) -> bool {
-    e.chain()
-        .any(|c| c.downcast_ref::<io::Error>().map(|e| e.kind() == io::ErrorKind::BrokenPipe).unwrap_or(false))
+    e.chain().any(|c| {
+        c.downcast_ref::<io::Error>()
+            .map(|e| e.kind() == io::ErrorKind::BrokenPipe)
+            .unwrap_or(false)
+    })
 }
 
 fn root_and_dir(args: &mut Args) -> Result<(PathBuf, PathBuf)> {
@@ -194,7 +199,13 @@ fn cmd_build(mut a: Args) -> Result<u8> {
     }
     if opts.symbols {
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        match scout_index::symbolize::backfill(&root, &dir, opts.threads, !quiet && !json_out, &cancel)? {
+        match scout_index::symbolize::backfill(
+            &root,
+            &dir,
+            opts.threads,
+            !quiet && !json_out,
+            &cancel,
+        )? {
             Some(ss) => {
                 if json_out {
                     println!(
@@ -226,7 +237,10 @@ fn cmd_build(mut a: Args) -> Result<u8> {
 
 fn open_index(dir: &Path, root: &Path) -> Result<Index> {
     if !Manifest::exists(dir) {
-        bail!("no index for {}; run `scout build` (or :ScoutIndex)", root.display());
+        bail!(
+            "no index for {}; run `scout build` (or :ScoutIndex)",
+            root.display()
+        );
     }
     Index::open(dir)
 }
@@ -242,8 +256,14 @@ pub fn start_background_build(root: &Path, dir: &Path) {
 /// `PATH` relative to the repository root, for `--near`.
 fn rel_to_root(root: &Path, n: &str) -> String {
     let p = PathBuf::from(n);
-    let p = if p.is_absolute() { p } else { std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p) };
-    p.strip_prefix(root).map(|r| r.display().to_string()).unwrap_or_else(|_| n.to_string())
+    let p = if p.is_absolute() {
+        p
+    } else {
+        std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p)
+    };
+    p.strip_prefix(root)
+        .map(|r| r.display().to_string())
+        .unwrap_or_else(|_| n.to_string())
 }
 
 fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
@@ -267,7 +287,7 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     let color = a.opt(&["--color"])?;
     let near = a.opt(&["--near"])?;
     let no_auto = a.flag(&["--no-auto-index"]);
-    let pos = a.positionals()?;
+    let pos = a.terms()?;
     if pos.is_empty() {
         bail!("search needs a QUERY");
     }
@@ -329,7 +349,13 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     let mut err: Option<io::Error> = None;
     let mut emit = |h: &scout_query::Hit| {
         // Flush early so a picker shows the first results right away.
-        let r = pr.hit(h).and_then(|_| if pr.hits == 1 || pr.hits % 200 == 0 { pr.flush() } else { Ok(()) });
+        let r = pr.hit(h).and_then(|_| {
+            if pr.hits == 1 || pr.hits % 200 == 0 {
+                pr.flush()
+            } else {
+                Ok(())
+            }
+        });
         if let Err(e) = r {
             err = Some(e);
             return false;
@@ -381,22 +407,33 @@ fn cmd_files(mut a: Args) -> Result<u8> {
     let json_out = a.flag(&["--json"]);
     let max: Option<usize> = a.parsed(&["--max-count", "--max", "-m"])?;
     let near = a.opt(&["--near"])?;
-    let query = a.positionals()?.join(" ");
+    let query = a.terms()?.join(" ");
     let paths: Vec<String> = if Manifest::exists(&dir) {
         let index = open_index(&dir, &root)?;
-        index.live_files().map(|f| String::from_utf8_lossy(f.path).into_owned()).collect()
+        index
+            .live_files()
+            .map(|f| String::from_utf8_lossy(f.path).into_owned())
+            .collect()
     } else {
         start_background_build(&root, &dir);
         scout_query::walk(&root, SearchOptions::default().threads)?
     };
-    let limit = max.unwrap_or(if query.trim().is_empty() { usize::MAX } else { 200 });
+    let limit = max.unwrap_or(if query.trim().is_empty() {
+        usize::MAX
+    } else {
+        200
+    });
     let near = near.map(|n| rel_to_root(&root, &n));
     let found = scout_query::files::find(&paths, &query, near.as_deref(), limit)?;
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
     for m in &found {
         if json_out {
-            writeln!(out, "{}", serde_json::json!({"type": "file", "path": m.path, "score": m.score, "positions": m.positions}))?;
+            writeln!(
+                out,
+                "{}",
+                serde_json::json!({"type": "file", "path": m.path, "score": m.score, "positions": m.positions})
+            )?;
         } else {
             out.write_all(m.path.as_bytes())?;
             out.write_all(b"\n")?;
@@ -409,7 +446,11 @@ fn cmd_files(mut a: Args) -> Result<u8> {
 fn serve_excludes(a: &mut Args) -> Result<Option<Vec<String>>> {
     let ex = a.opts(&["--exclude"])?;
     let none = a.flag(&["--no-excludes"]);
-    Ok(if !ex.is_empty() || none { Some(ex) } else { None })
+    Ok(if !ex.is_empty() || none {
+        Some(ex)
+    } else {
+        None
+    })
 }
 
 fn cmd_serve(mut a: Args) -> Result<u8> {
@@ -423,7 +464,11 @@ fn cmd_serve(mut a: Args) -> Result<u8> {
         daemon::serve(
             &root,
             &dir,
-            daemon::ServeOptions { idle, excludes, threads: threads.unwrap_or_else(build::default_threads) },
+            daemon::ServeOptions {
+                idle,
+                excludes,
+                threads: threads.unwrap_or_else(build::default_threads),
+            },
         )?;
     } else {
         daemon::spawn_detached(&root, &dir, &excludes, idle)?;
@@ -439,7 +484,11 @@ fn cmd_notify(mut a: Args) -> Result<u8> {
         .iter()
         .map(|p| {
             let pb = PathBuf::from(p);
-            let abs = if pb.is_absolute() { pb } else { std::env::current_dir().unwrap_or_default().join(pb) };
+            let abs = if pb.is_absolute() {
+                pb
+            } else {
+                std::env::current_dir().unwrap_or_default().join(pb)
+            };
             format!("notify {}", abs.display())
         })
         .collect();
@@ -509,11 +558,20 @@ fn cmd_status(mut a: Args) -> Result<u8> {
 
     if let Some(p) = why {
         let pb = PathBuf::from(&p);
-        let abs = if pb.is_absolute() { pb } else { std::env::current_dir()?.join(pb) };
+        let abs = if pb.is_absolute() {
+            pb
+        } else {
+            std::env::current_dir()?.join(pb)
+        };
         let abs = abs.canonicalize().unwrap_or(abs);
-        let rel = abs.strip_prefix(&root).with_context(|| format!("{} is outside {}", p, root.display()))?;
+        let rel = abs
+            .strip_prefix(&root)
+            .with_context(|| format!("{} is outside {}", p, root.display()))?;
         let m = Manifest::load(&dir).ok();
-        let rules = Rules::new(&root, m.as_ref().map(|m| m.excludes.as_slice()).unwrap_or(&[]))?;
+        let rules = Rules::new(
+            &root,
+            m.as_ref().map(|m| m.excludes.as_slice()).unwrap_or(&[]),
+        )?;
         let verdict = match rules.check(rel, abs.is_dir()) {
             Verdict::Excluded(why) => format!("skipped: {}", why),
             Verdict::Included if abs.is_dir() => "included (directory)".to_string(),
@@ -532,9 +590,21 @@ fn cmd_status(mut a: Args) -> Result<u8> {
             .map(|i| i.lookup(rel.as_os_str().as_encoded_bytes()).is_some())
             .unwrap_or(false);
         if json_out {
-            println!("{}", json!({"path": rel, "verdict": verdict, "in_index": indexed}));
+            println!(
+                "{}",
+                json!({"path": rel, "verdict": verdict, "in_index": indexed})
+            );
         } else {
-            println!("{}: {}{}", rel.display(), verdict, if indexed { " (in index)" } else { " (not in index)" });
+            println!(
+                "{}: {}{}",
+                rel.display(),
+                verdict,
+                if indexed {
+                    " (in index)"
+                } else {
+                    " (not in index)"
+                }
+            );
         }
         return Ok(0);
     }
@@ -573,7 +643,9 @@ fn cmd_status(mut a: Args) -> Result<u8> {
             let age = manifest::now_secs().saturating_sub(m.updated_at);
             println!("updated:   {}s ago", age);
             match (&m.commit, &head) {
-                (Some(c), Some(h)) if c == h => println!("commit:    {} (current)", &c[..c.len().min(12)]),
+                (Some(c), Some(h)) if c == h => {
+                    println!("commit:    {} (current)", &c[..c.len().min(12)])
+                }
                 (Some(c), Some(h)) => println!(
                     "commit:    {} (HEAD is {}, reconcile pending)",
                     &c[..c.len().min(12)],

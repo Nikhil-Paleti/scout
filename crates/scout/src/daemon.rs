@@ -80,14 +80,22 @@ pub fn is_running(dir: &Path) -> bool {
 }
 
 /// Starts `scout serve --foreground` detached from the caller's session.
-pub fn spawn_detached(root: &Path, dir: &Path, excludes: &Option<Vec<String>>, idle: Duration) -> Result<()> {
+pub fn spawn_detached(
+    root: &Path,
+    dir: &Path,
+    excludes: &Option<Vec<String>>,
+    idle: Duration,
+) -> Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     manifest::ensure_dir(dir)?;
     if is_running(dir) {
         return Ok(());
     }
-    let log = fs::OpenOptions::new().create(true).append(true).open(dir.join("daemon.log"))?;
+    let log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("daemon.log"))?;
     let mut cmd = Command::new(std::env::current_exe()?);
     cmd.arg("serve").arg("--foreground").arg("--root").arg(root);
     cmd.arg("--idle-secs").arg(idle.as_secs().to_string());
@@ -99,7 +107,9 @@ pub fn spawn_detached(root: &Path, dir: &Path, excludes: &Option<Vec<String>>, i
             cmd.arg("--exclude").arg(e);
         }
     }
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::from(log));
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(log));
     unsafe {
         cmd.pre_exec(|| {
             libc::setsid();
@@ -131,7 +141,9 @@ fn handle_conn(stream: UnixStream, tx: Sender<Msg>) {
                 let _ = tx.send(Msg::Paths(vec![PathBuf::from(arg)]));
             }
             "reconcile" => {
-                let _ = tx.send(Msg::Reconcile { full: arg == "full" });
+                let _ = tx.send(Msg::Reconcile {
+                    full: arg == "full",
+                });
             }
             "rebuild" => {
                 let _ = tx.send(Msg::Rebuild);
@@ -198,9 +210,14 @@ impl Worker {
         if !scout_index::symbolize::needed(&self.dir) {
             return;
         }
-        let (root, dir, threads, cancel) = (self.root.clone(), self.dir.clone(), self.threads, self.sym_cancel.clone());
-        self.sym_job = Some(std::thread::spawn(move || {
-            match scout_index::symbolize::backfill(&root, &dir, threads, false, &cancel) {
+        let (root, dir, threads, cancel) = (
+            self.root.clone(),
+            self.dir.clone(),
+            self.threads,
+            self.sym_cancel.clone(),
+        );
+        self.sym_job = Some(std::thread::spawn(
+            move || match scout_index::symbolize::backfill(&root, &dir, threads, false, &cancel) {
                 Ok(Some(s)) if s.segments > 0 => log(format!(
                     "symbols: {} from {} files in {:.1?} ({:.1} MB)",
                     s.symbols,
@@ -210,12 +227,15 @@ impl Worker {
                 )),
                 Ok(_) => {}
                 Err(e) => log(format!("symbol indexing failed: {:#}", e)),
-            }
-        }));
+            },
+        ));
     }
 
     fn symbolizing(&self) -> bool {
-        self.sym_job.as_ref().map(|j| !j.is_finished()).unwrap_or(false)
+        self.sym_job
+            .as_ref()
+            .map(|j| !j.is_finished())
+            .unwrap_or(false)
     }
 
     fn rel(&self, p: &Path) -> Option<PathBuf> {
@@ -258,7 +278,11 @@ impl Worker {
         self.pending.clear();
         self.first_pending = None;
         self.git_stamp = repo::git_stamp(&self.root);
-        log(format!("rebuilt: {} files in {:.1?}", st.files_indexed, t.elapsed()));
+        log(format!(
+            "rebuilt: {} files in {:.1?}",
+            st.files_indexed,
+            t.elapsed()
+        ));
         Ok(())
     }
 
@@ -267,7 +291,11 @@ impl Worker {
         let head_before = repo::head(&self.root);
         let m = Manifest::load(&self.dir)?;
         let mut paths = Vec::new();
-        match m.commit.as_deref().and_then(|c| repo::changed_since(&self.root, c)) {
+        match m
+            .commit
+            .as_deref()
+            .and_then(|c| repo::changed_since(&self.root, c))
+        {
             Some(p) => paths.extend(p),
             None if repo::head(&self.root).is_some() && m.commit != repo::head(&self.root) => {
                 // The indexed commit is unknown to git (gc'd, shallow): stat walk.
@@ -295,7 +323,12 @@ impl Worker {
         self.rules.reload();
         let index = Index::open(&self.dir)?;
         let skipped = std::sync::atomic::AtomicU64::new(0);
-        let on_disk = build::walk(&self.rules, self.threads, filter::DEFAULT_MAX_FILE_SIZE, &skipped);
+        let on_disk = build::walk(
+            &self.rules,
+            self.threads,
+            filter::DEFAULT_MAX_FILE_SIZE,
+            &skipped,
+        );
         let mut changed: Vec<PathBuf> = Vec::new();
         let mut seen: BTreeSet<Vec<u8>> = BTreeSet::new();
         for rel in &on_disk {
@@ -305,7 +338,9 @@ impl Worker {
                     let m = index.segments[si].seg.meta(id);
                     let md = fs::symlink_metadata(self.root.join(rel));
                     let same = md
-                        .map(|md| md.len() == m.size && scout_index::segment::mtime_ns(&md) == m.mtime_ns)
+                        .map(|md| {
+                            md.len() == m.size && scout_index::segment::mtime_ns(&md) == m.mtime_ns
+                        })
                         .unwrap_or(false);
                     if !same {
                         changed.push(rel.clone());
@@ -320,7 +355,10 @@ impl Worker {
                 changed.push(PathBuf::from(String::from_utf8_lossy(f.path).into_owned()));
             }
         }
-        log(format!("full reconcile: {} paths to re-check", changed.len()));
+        log(format!(
+            "full reconcile: {} paths to re-check",
+            changed.len()
+        ));
         self.enqueue(changed);
         self.pending_commit = head_before;
         self.first_pending.get_or_insert_with(Instant::now);
@@ -335,7 +373,13 @@ impl Worker {
         let commit = self.pending_commit.take();
         let stats = {
             let _g = lock::lock(&self.dir.join(lock::WRITE_LOCK))?;
-            apply_changes(&self.dir, &self.rules, &paths, filter::DEFAULT_MAX_FILE_SIZE, commit)?
+            apply_changes(
+                &self.dir,
+                &self.rules,
+                &paths,
+                filter::DEFAULT_MAX_FILE_SIZE,
+                commit,
+            )?
         };
         if stats.indexed + stats.removed > 0 {
             log(format!(
@@ -360,8 +404,15 @@ impl Worker {
 
     fn maybe_compact(&mut self) -> Result<()> {
         let m = Manifest::load(&self.dir)?;
-        let base_files: u64 = m.segments.iter().filter(|s| s.kind == "base").map(|s| s.files as u64).sum();
-        let deltas: Vec<usize> = (0..m.segments.len()).filter(|&i| m.segments[i].kind == "delta").collect();
+        let base_files: u64 = m
+            .segments
+            .iter()
+            .filter(|s| s.kind == "base")
+            .map(|s| s.files as u64)
+            .sum();
+        let deltas: Vec<usize> = (0..m.segments.len())
+            .filter(|&i| m.segments[i].kind == "delta")
+            .collect();
         let delta_files: u64 = deltas.iter().map(|&i| m.segments[i].files as u64).sum();
         let first_delta = match deltas.first() {
             Some(&i) => i,
@@ -401,7 +452,12 @@ impl Worker {
         m.store(&self.dir)?;
         drop(index);
         manifest::gc(&self.dir, &m);
-        log(format!("compacted into one {} segment ({} files) in {:.1?}", kind, files, t.elapsed()));
+        log(format!(
+            "compacted into one {} segment ({} files) in {:.1?}",
+            kind,
+            files,
+            t.elapsed()
+        ));
         Ok(())
     }
 
@@ -434,15 +490,23 @@ pub fn serve(root: &Path, dir: &Path, opts: ServeOptions) -> Result<()> {
     fs::write(dir.join("daemon.pid"), std::process::id().to_string())?;
     let sock = socket_path(dir);
     if sock.as_os_str().len() > 100 {
-        bail!("socket path too long: {} (set SCOUT_CACHE_DIR to a shorter path)", sock.display());
+        bail!(
+            "socket path too long: {} (set SCOUT_CACHE_DIR to a shorter path)",
+            sock.display()
+        );
     }
     let _ = fs::remove_file(&sock);
-    let listener = UnixListener::bind(&sock).with_context(|| format!("binding {}", sock.display()))?;
+    let listener =
+        UnixListener::bind(&sock).with_context(|| format!("binding {}", sock.display()))?;
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&sock, fs::Permissions::from_mode(0o600))?;
     }
-    log(format!("serving {} (pid {})", root.display(), std::process::id()));
+    log(format!(
+        "serving {} (pid {})",
+        root.display(),
+        std::process::id()
+    ));
 
     let (tx, rx) = mpsc::channel::<Msg>();
     {
@@ -496,7 +560,11 @@ pub fn serve(root: &Path, dir: &Path, opts: ServeOptions) -> Result<()> {
     }
 
     loop {
-        let timeout = if w.pending.is_empty() { Duration::from_millis(500) } else { Duration::from_millis(50) };
+        let timeout = if w.pending.is_empty() {
+            Duration::from_millis(500)
+        } else {
+            Duration::from_millis(50)
+        };
         match rx.recv_timeout(timeout) {
             Ok(Msg::Paths(p)) => {
                 w.last_activity = Instant::now();
@@ -504,7 +572,11 @@ pub fn serve(root: &Path, dir: &Path, opts: ServeOptions) -> Result<()> {
             }
             Ok(Msg::Reconcile { full }) => {
                 w.last_activity = Instant::now();
-                let r = if full { w.full_reconcile() } else { w.git_reconcile() };
+                let r = if full {
+                    w.full_reconcile()
+                } else {
+                    w.git_reconcile()
+                };
                 if let Err(e) = r {
                     log(format!("reconcile failed: {:#}", e));
                 }
@@ -549,7 +621,8 @@ pub fn serve(root: &Path, dir: &Path, opts: ServeOptions) -> Result<()> {
             break;
         }
     }
-    w.sym_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    w.sym_cancel
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(j) = w.sym_job.take() {
         let _ = j.join();
     }

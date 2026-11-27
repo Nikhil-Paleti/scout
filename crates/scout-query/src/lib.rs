@@ -26,8 +26,8 @@ use rayon::prelude::*;
 
 use scout_index::{Index, Segment};
 
-pub use filters::{Case, Expr, TermKind};
 use eval::Cand;
+pub use filters::{Case, Expr, TermKind};
 use plan::Q;
 use regions::Regions;
 
@@ -61,7 +61,9 @@ impl Default for SearchOptions {
             fixed: false,
             word: false,
             max_matches: 5000,
-            threads: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4),
+            threads: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
             near: None,
             filters: true,
             paths: true,
@@ -156,7 +158,11 @@ fn insensitive(case: Case, pattern: &str) -> bool {
 }
 
 pub fn parse(query: &str, opts: &SearchOptions) -> Result<filters::Parsed> {
-    Ok(if opts.filters { filters::parse(query)? } else { filters::Parsed::raw(query) })
+    Ok(if opts.filters {
+        filters::parse(query)?
+    } else {
+        filters::Parsed::raw(query)
+    })
 }
 
 pub fn compile(query: &str, opts: &SearchOptions) -> Result<Compiled> {
@@ -166,7 +172,11 @@ pub fn compile(query: &str, opts: &SearchOptions) -> Result<Compiled> {
 pub fn compile_parsed(parsed: &filters::Parsed, opts: &SearchOptions) -> Result<Compiled> {
     let mut terms = Vec::with_capacity(parsed.terms.len());
     for t in &parsed.terms {
-        let kind = if t.kind == TermKind::Text && !opts.paths { TermKind::Content } else { t.kind };
+        let kind = if t.kind == TermKind::Text && !opts.paths {
+            TermKind::Content
+        } else {
+            t.kind
+        };
         let mut pattern = if opts.fixed && !t.literal && kind != TermKind::Path {
             regex_syntax::escape(&t.pattern)
         } else {
@@ -182,7 +192,10 @@ pub fn compile_parsed(parsed: &filters::Parsed, opts: &SearchOptions) -> Result<
             if !parsed.pcre {
                 b.line_terminator(Some(b'\n'));
             }
-            Some(b.build(&pattern).with_context(|| format!("invalid regex `{}`", pattern))?)
+            Some(
+                b.build(&pattern)
+                    .with_context(|| format!("invalid regex `{}`", pattern))?,
+            )
         } else {
             None
         };
@@ -208,11 +221,24 @@ pub fn compile_parsed(parsed: &filters::Parsed, opts: &SearchOptions) -> Result<
         } else {
             Q::All
         };
-        terms.push(CTerm { kind, matcher, path, plan });
+        terms.push(CTerm {
+            kind,
+            matcher,
+            path,
+            plan,
+        });
     }
     let positive = parsed.positive_terms();
-    let positive_content: Vec<usize> = positive.iter().copied().filter(|&i| terms[i].kind.reads_content()).collect();
-    let positive_path: Vec<usize> = positive.iter().copied().filter(|&i| terms[i].path.is_some()).collect();
+    let positive_content: Vec<usize> = positive
+        .iter()
+        .copied()
+        .filter(|&i| terms[i].kind.reads_content())
+        .collect();
+    let positive_path: Vec<usize> = positive
+        .iter()
+        .copied()
+        .filter(|&i| terms[i].path.is_some())
+        .collect();
     let mut all_content = Vec::new();
     for (i, t) in terms.iter().enumerate() {
         if t.kind.reads_content() {
@@ -220,7 +246,9 @@ pub fn compile_parsed(parsed: &filters::Parsed, opts: &SearchOptions) -> Result<
         }
     }
     let neg_content = all_content.iter().any(|i| !positive_content.contains(i));
-    let needs_regions = terms.iter().any(|t| matches!(t.kind, TermKind::Comment | TermKind::Usage));
+    let needs_regions = terms
+        .iter()
+        .any(|t| matches!(t.kind, TermKind::Comment | TermKind::Usage));
     let c = Compiled {
         terms,
         expr: parsed.expr.clone(),
@@ -336,7 +364,14 @@ impl Compiled {
     }
 
     fn path_matches(&self, path: &[u8]) -> Vec<bool> {
-        self.terms.iter().map(|t| t.path.as_ref().is_some_and(|m| m.is_match(path).unwrap_or(false))).collect()
+        self.terms
+            .iter()
+            .map(|t| {
+                t.path
+                    .as_ref()
+                    .is_some_and(|m| m.is_match(path).unwrap_or(false))
+            })
+            .collect()
     }
 
     /// Path check for the candidate step: false only when the path rules
@@ -348,7 +383,10 @@ impl Compiled {
     /// For symbol queries: the conjuncts made of `file:`/`lang:` terms.
     pub(crate) fn sym_path_ok(&self, path: &[u8]) -> bool {
         let pm = self.path_matches(path);
-        self.conjuncts().into_iter().filter(|e| !self.term_kinds(e).1).all(|e| self.eval(e, &|i| pm[i]))
+        self.conjuncts()
+            .into_iter()
+            .filter(|e| !self.term_kinds(e).1)
+            .all(|e| self.eval(e, &|i| pm[i]))
     }
 
     pub(crate) fn has_line_filter(&self) -> bool {
@@ -357,9 +395,17 @@ impl Compiled {
 
     /// For symbol queries: the conjuncts with search words, against a line.
     pub(crate) fn sym_line_ok(&self, line: &[u8]) -> bool {
-        self.conjuncts().into_iter().filter(|e| self.term_kinds(e).1).all(|e| {
-            self.eval(e, &|i| self.terms[i].matcher.as_ref().is_some_and(|m| m.is_match(line).unwrap_or(false)))
-        })
+        self.conjuncts()
+            .into_iter()
+            .filter(|e| self.term_kinds(e).1)
+            .all(|e| {
+                self.eval(e, &|i| {
+                    self.terms[i]
+                        .matcher
+                        .as_ref()
+                        .is_some_and(|m| m.is_match(line).unwrap_or(false))
+                })
+            })
     }
 
     pub fn describe(&self) -> String {
@@ -375,8 +421,17 @@ impl Compiled {
                     }
                 }
                 Expr::Not(_) => "all".into(),
-                Expr::And(xs) => format!("({})", xs.iter().map(|x| go(c, x)).collect::<Vec<_>>().join(" AND ")),
-                Expr::Or(xs) => format!("({})", xs.iter().map(|x| go(c, x)).collect::<Vec<_>>().join(" OR ")),
+                Expr::And(xs) => format!(
+                    "({})",
+                    xs.iter()
+                        .map(|x| go(c, x))
+                        .collect::<Vec<_>>()
+                        .join(" AND ")
+                ),
+                Expr::Or(xs) => format!(
+                    "({})",
+                    xs.iter().map(|x| go(c, x)).collect::<Vec<_>>().join(" OR ")
+                ),
             }
         }
         go(self, &self.expr)
@@ -387,7 +442,9 @@ impl Compiled {
     fn seg_cands(&self, seg: &Segment, e: &Expr) -> Cand {
         let path_ids = |i: usize| -> Vec<u32> {
             let m = self.terms[i].path.as_ref().unwrap();
-            (0..seg.num_files()).filter(|&id| m.is_match(seg.path(id)).unwrap_or(false)).collect()
+            (0..seg.num_files())
+                .filter(|&id| m.is_match(seg.path(id)).unwrap_or(false))
+                .collect()
         };
         match e {
             Expr::True | Expr::Not(_) => Cand::All,
@@ -439,13 +496,19 @@ fn is_lowrank(path: &str) -> u32 {
     let mut p = 0;
     for part in path.split('/') {
         match part {
-            "vendor" | "third_party" | "thirdparty" | "external" | "node_modules" | "deps" => p += 4,
+            "vendor" | "third_party" | "thirdparty" | "external" | "node_modules" | "deps" => {
+                p += 4
+            }
             "test" | "tests" | "testdata" | "testing" | "__tests__" | "spec" => p += 2,
             _ => {}
         }
     }
     let file = path.rsplit('/').next().unwrap_or(path);
-    if file.contains("_test.") || file.contains(".test.") || file.contains("_spec.") || file.starts_with("test_") {
+    if file.contains("_test.")
+        || file.contains(".test.")
+        || file.contains("_spec.")
+        || file.starts_with("test_")
+    {
         p += 2;
     }
     p
@@ -454,7 +517,10 @@ fn is_lowrank(path: &str) -> u32 {
 fn shared_dirs(a: &str, near: &str) -> u32 {
     let ad = a.rsplit_once('/').map(|x| x.0).unwrap_or("");
     let nd = near.rsplit_once('/').map(|x| x.0).unwrap_or("");
-    ad.split('/').zip(nd.split('/')).take_while(|(x, y)| x == y && !x.is_empty()).count() as u32
+    ad.split('/')
+        .zip(nd.split('/'))
+        .take_while(|(x, y)| x == y && !x.is_empty())
+        .count() as u32
 }
 
 /// Lower is better: near the current file first, vendored and test code last.
@@ -487,7 +553,10 @@ impl Sink for HitSink<'_> {
     fn matched(&mut self, _s: &Searcher, m: &SinkMatch<'_>) -> Result<bool, io::Error> {
         let bytes = m.bytes();
         let off = m.absolute_byte_offset() as usize;
-        let mut line = &bytes[..bytes.iter().position(|&b| b == b'\n').unwrap_or(bytes.len())];
+        let mut line = &bytes[..bytes
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap_or(bytes.len())];
         if line.last() == Some(&b'\r') {
             line = &line[..line.len() - 1];
         }
@@ -512,7 +581,11 @@ impl Sink for HitSink<'_> {
             return Ok(true);
         }
         let col = ranges.first().map(|r| r.0 as u64 + 1).unwrap_or(1);
-        let text = if line.len() > self.max_line { line[..self.max_line].to_vec() } else { line.to_vec() };
+        let text = if line.len() > self.max_line {
+            line[..self.max_line].to_vec()
+        } else {
+            line.to_vec()
+        };
         ranges.retain(|r| r.1 <= text.len());
         self.hits.push(Hit {
             path: self.path.to_string(),
@@ -563,27 +636,34 @@ pub fn search(
         ..Default::default()
     };
 
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(opts.threads.max(1)).build()?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(opts.threads.max(1))
+        .build()?;
     let per_seg: Vec<Vec<(u32, String)>> = pool.install(|| {
         index
             .segments
             .par_iter()
             .map(|s| {
-                let ids: Box<dyn Iterator<Item = u32>> = match compiled.seg_cands(&s.seg, &compiled.expr) {
-                    Cand::All => Box::new(0..s.seg.num_files()),
-                    Cand::Ids(v) => Box::new(v.into_iter()),
-                };
+                let ids: Box<dyn Iterator<Item = u32>> =
+                    match compiled.seg_cands(&s.seg, &compiled.expr) {
+                        Cand::All => Box::new(0..s.seg.num_files()),
+                        Cand::Ids(v) => Box::new(v.into_iter()),
+                    };
                 ids.filter(|&id| s.is_live(id))
                     .filter_map(|id| {
                         let p = s.seg.path(id);
-                        compiled.path_ok(p).then(|| (0u32, String::from_utf8_lossy(p).into_owned()))
+                        compiled
+                            .path_ok(p)
+                            .then(|| (0u32, String::from_utf8_lossy(p).into_owned()))
                     })
                     .collect()
             })
             .collect()
     });
     let cands: Vec<(u32, String)> = per_seg.into_iter().flatten().collect();
-    run(root, cands, &compiled, opts, &pool, &mut stats, t0, false, emit);
+    run(
+        root, cands, &compiled, opts, &pool, &mut stats, t0, false, emit,
+    );
     Ok(stats)
 }
 
@@ -603,8 +683,14 @@ pub fn search_unindexed(
         bail!("sym: and calls: need the index, which is still building; try again shortly, or search the text");
     }
     let compiled = compile_parsed(&parsed, opts)?;
-    let mut stats = SearchStats { plan: "scan (no index yet)".to_string(), plan_time: t0.elapsed(), ..Default::default() };
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(opts.threads.max(1)).build()?;
+    let mut stats = SearchStats {
+        plan: "scan (no index yet)".to_string(),
+        plan_time: t0.elapsed(),
+        ..Default::default()
+    };
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(opts.threads.max(1))
+        .build()?;
     let paths = walk(root, opts.threads)?;
     let cands: Vec<(u32, String)> = paths
         .iter()
@@ -612,7 +698,9 @@ pub fn search_unindexed(
         .map(|p| (0u32, p.clone()))
         .collect();
     stats.live_files = paths.len() as u64;
-    run(root, cands, &compiled, opts, &pool, &mut stats, t0, true, emit);
+    run(
+        root, cands, &compiled, opts, &pool, &mut stats, t0, true, emit,
+    );
     Ok(stats)
 }
 
@@ -620,8 +708,16 @@ pub fn search_unindexed(
 pub fn walk(root: &Path, threads: usize) -> Result<Vec<String>> {
     let rules = scout_index::Rules::new(root, &[])?;
     let skipped = std::sync::atomic::AtomicU64::new(0);
-    let paths = scout_index::build::walk(&rules, threads.max(1), scout_index::filter::DEFAULT_MAX_FILE_SIZE, &skipped);
-    Ok(paths.iter().map(|p| p.to_string_lossy().into_owned()).collect())
+    let paths = scout_index::build::walk(
+        &rules,
+        threads.max(1),
+        scout_index::filter::DEFAULT_MAX_FILE_SIZE,
+        &skipped,
+    );
+    Ok(paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect())
 }
 
 /// Sort key for file hits: a match in the base name first, then the usual
@@ -629,7 +725,11 @@ pub fn walk(root: &Path, threads: usize) -> Result<Vec<String>> {
 fn file_rank(c: &Compiled, path: &str, near: Option<&str>) -> (u32, u32, usize) {
     let base = path.rsplit('/').next().unwrap_or(path).as_bytes();
     let in_base = c.positive_path.iter().any(|&i| {
-        c.terms[i].kind == TermKind::Text && c.terms[i].path.as_ref().is_some_and(|m| m.is_match(base).unwrap_or(false))
+        c.terms[i].kind == TermKind::Text
+            && c.terms[i]
+                .path
+                .as_ref()
+                .is_some_and(|m| m.is_match(base).unwrap_or(false))
     });
     (u32::from(!in_base), path_rank(path, near), path.len())
 }
@@ -677,7 +777,11 @@ fn run(
     };
 
     // 1. File-name hits.
-    let file_cap = if lines_wanted { opts.max_file_hits.min(max) } else { max };
+    let file_cap = if lines_wanted {
+        opts.max_file_hits.min(max)
+    } else {
+        max
+    };
     let want_files = (opts.paths || !lines_wanted) && !c.positive_path.is_empty() && file_cap > 0;
     if want_files {
         let mut fc: Vec<((u32, u32, usize), &str)> = cands
@@ -763,9 +867,15 @@ fn run(
                     .par_iter()
                     .map(|(_, rel)| {
                         if halt.load(Ordering::Relaxed) {
-                            return FileResult { hits: Vec::new(), searched: false };
+                            return FileResult {
+                                hits: Vec::new(),
+                                searched: false,
+                            };
                         }
-                        FileResult { hits: file_lines(root, rel, c, opts, remaining, read_whole), searched: true }
+                        FileResult {
+                            hits: file_lines(root, rel, c, opts, remaining, read_whole),
+                            searched: true,
+                        }
                     })
                     .collect()
             });
@@ -822,8 +932,18 @@ fn term_hits(
     limit: usize,
 ) -> Vec<Hit> {
     let t = &c.terms[i];
-    let Some(m) = &t.matcher else { return Vec::new() };
-    let mut sink = HitSink { matcher: m, hits: Vec::new(), path: rel, max_line, limit: limit.max(1), kind: t.kind, regions };
+    let Some(m) = &t.matcher else {
+        return Vec::new();
+    };
+    let mut sink = HitSink {
+        matcher: m,
+        hits: Vec::new(),
+        path: rel,
+        max_line,
+        limit: limit.max(1),
+        kind: t.kind,
+        regions,
+    };
     let _ = searcher(c.pcre).search_slice(m, data, &mut sink);
     sink.hits
 }
@@ -844,16 +964,33 @@ fn content_vals(c: &Compiled, rel: &str, data: &[u8], pm: &[bool]) -> Vec<bool> 
 }
 
 /// Line hits for one file, or none when the file doesn't satisfy the query.
-fn file_lines(root: &Path, rel: &str, c: &Compiled, opts: &SearchOptions, limit: usize, read_whole: bool) -> Vec<Hit> {
+fn file_lines(
+    root: &Path,
+    rel: &str,
+    c: &Compiled,
+    opts: &SearchOptions,
+    limit: usize,
+    read_whole: bool,
+) -> Vec<Hit> {
     let pm = c.path_matches(rel.as_bytes());
     if c.eval3(&c.expr, &pm) == Some(false) {
         return Vec::new();
     }
-    let Some(data) = read(root, rel, read_whole) else { return Vec::new() };
+    let Some(data) = read(root, rel, read_whole) else {
+        return Vec::new();
+    };
     let regions = c.needs_regions.then(|| regions::regions(rel, &data));
     let mut per_term: Vec<Option<Vec<Hit>>> = vec![None; c.terms.len()];
     for &i in &c.positive_content {
-        per_term[i] = Some(term_hits(c, i, rel, &data, regions.as_ref(), opts.max_line_bytes, limit));
+        per_term[i] = Some(term_hits(
+            c,
+            i,
+            rel,
+            &data,
+            regions.as_ref(),
+            opts.max_line_bytes,
+            limit,
+        ));
     }
     let vals: Vec<bool> = (0..c.terms.len())
         .map(|i| {

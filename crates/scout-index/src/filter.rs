@@ -59,7 +59,14 @@ mod tests {
         let long = vec![b'x'; 4000];
         assert_eq!(check_content(&long), Some(Skip::Minified));
         let short_line = vec![b'x'; 600];
-        assert_eq!(check_content(&short_line), None, "small files are never minified");
-        assert_eq!(check_size(2 << 20, DEFAULT_MAX_FILE_SIZE), Some(Skip::TooLarge));
+        assert_eq!(
+            check_content(&short_line),
+            None,
+            "small files are never minified"
+        );
+        assert_eq!(
+            check_size(2 << 20, DEFAULT_MAX_FILE_SIZE),
+            Some(Skip::TooLarge)
+        );
     }
 }

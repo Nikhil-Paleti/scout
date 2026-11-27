@@ -120,11 +120,18 @@ struct Server {
 }
 
 fn arg_str<'a>(args: &'a Value, k: &str) -> Option<&'a str> {
-    args.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
+    args.get(k)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 fn arg_usize(args: &Value, k: &str, default: usize, max: usize) -> usize {
-    args.get(k).and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(default).min(max)
+    args.get(k)
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(default)
+        .min(max)
 }
 
 fn cut(line: &[u8]) -> String {
@@ -141,13 +148,18 @@ fn cut(line: &[u8]) -> String {
 impl Server {
     fn ensure_daemon(&self) {
         if Manifest::exists(&self.dir) && !daemon::is_running(&self.dir) {
-            let _ = daemon::spawn_detached(&self.root, &self.dir, &None, Duration::from_secs(30 * 60));
+            let _ =
+                daemon::spawn_detached(&self.root, &self.dir, &None, Duration::from_secs(30 * 60));
         }
     }
 
     fn run_query(&self, query: &str, limit: usize, context: usize) -> Result<String> {
         // File-name hits first, but leave most of the limit for lines.
-        let opts = SearchOptions { max_matches: limit, max_file_hits: (limit / 5).clamp(3, 50), ..Default::default() };
+        let opts = SearchOptions {
+            max_matches: limit,
+            max_file_hits: (limit / 5).clamp(3, 50),
+            ..Default::default()
+        };
         let mut hits: Vec<Hit> = Vec::new();
         let mut emit = |h: &Hit| {
             hits.push(h.clone());
@@ -242,14 +254,22 @@ impl Server {
                 }
             }
         }
-        let files = hits.iter().map(|h| h.path.as_str()).collect::<std::collections::HashSet<_>>().len();
+        let files = hits
+            .iter()
+            .map(|h| h.path.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
         out.push_str(&format!(
             "\n{} result{} in {} file{}{}.",
             hits.len(),
             if hits.len() == 1 { "" } else { "s" },
             files,
             if files == 1 { "" } else { "s" },
-            if truncated { "; more exist, raise limit or narrow with filters" } else { "" }
+            if truncated {
+                "; more exist, raise limit or narrow with filters"
+            } else {
+                ""
+            }
         ));
         if incomplete {
             out.push_str(" Symbols are still being indexed, so this may be incomplete.");
@@ -265,15 +285,31 @@ impl Server {
         } else {
             self.ensure_daemon();
             let index = Index::open(&self.dir)?;
-            index.live_files().map(|f| String::from_utf8_lossy(f.path).into_owned()).collect()
+            index
+                .live_files()
+                .map(|f| String::from_utf8_lossy(f.path).into_owned())
+                .collect()
         };
         let found = scout_query::files::find(&paths, query, None, limit + 1)?;
         if found.is_empty() {
             return Ok("No files.".into());
         }
         let more = found.len() > limit;
-        let mut out: String = found.iter().take(limit).map(|m| format!("{}\n", m.path)).collect();
-        out.push_str(&format!("\n{} file{}{}.", found.len().min(limit), if found.len() == 1 { "" } else { "s" }, if more { "; more exist, raise limit or add words" } else { "" }));
+        let mut out: String = found
+            .iter()
+            .take(limit)
+            .map(|m| format!("{}\n", m.path))
+            .collect();
+        out.push_str(&format!(
+            "\n{} file{}{}.",
+            found.len().min(limit),
+            if found.len() == 1 { "" } else { "s" },
+            if more {
+                "; more exist, raise limit or add words"
+            } else {
+                ""
+            }
+        ));
         Ok(out)
     }
 
@@ -283,7 +319,10 @@ impl Server {
             return Ok("Indexing started in the background. search answers meanwhile by scanning files; index_status shows progress, and find_symbol/find_callers work once it's done.".into());
         }
         if full && !daemon::is_running(&self.dir) {
-            let opts = BuildOptions { commit: repo::head(&self.root), ..Default::default() };
+            let opts = BuildOptions {
+                commit: repo::head(&self.root),
+                ..Default::default()
+            };
             let st = build::build_full(&self.root, &self.dir, &opts)?;
             self.ensure_daemon();
             return Ok(format!(
@@ -310,15 +349,23 @@ impl Server {
         let filters = arg_str(args, "filters").unwrap_or("");
         match name {
             "search" => {
-                let Some(q) = arg_str(args, "query") else { bail!("query is required") };
+                let Some(q) = arg_str(args, "query") else {
+                    bail!("query is required")
+                };
                 self.run_query(q, limit, context)
             }
             "find_symbol" | "find_callers" => {
-                let Some(n) = arg_str(args, "name") else { bail!("name is required") };
+                let Some(n) = arg_str(args, "name") else {
+                    bail!("name is required")
+                };
                 if n.contains(char::is_whitespace) {
                     bail!("name must be one word; put filters in `filters`");
                 }
-                let prefix = if name == "find_symbol" { "sym" } else { "calls" };
+                let prefix = if name == "find_symbol" {
+                    "sym"
+                } else {
+                    "calls"
+                };
                 let mut q = format!("{prefix}:{n} {filters}");
                 if let Some(k) = arg_str(args, "kind").filter(|_| name == "find_symbol") {
                     q.push_str(&format!(" kind:{k}"));
@@ -326,7 +373,9 @@ impl Server {
                 self.run_query(q.trim(), limit, context)
             }
             "find_files" => {
-                let Some(q) = arg_str(args, "query") else { bail!("query is required") };
+                let Some(q) = arg_str(args, "query") else {
+                    bail!("query is required")
+                };
                 self.find_files(q, limit)
             }
             "index_status" => {
@@ -348,7 +397,11 @@ impl Server {
         let params = msg.get("params").cloned().unwrap_or(Value::Null);
         let result: Result<Value, (i64, String)> = match method {
             "initialize" => {
-                let v = params.get("protocolVersion").and_then(|v| v.as_str()).unwrap_or(PROTOCOL).to_string();
+                let v = params
+                    .get("protocolVersion")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(PROTOCOL)
+                    .to_string();
                 Ok(json!({
                     "protocolVersion": v,
                     "capabilities": {"tools": {"listChanged": false}},
@@ -365,8 +418,12 @@ impl Server {
                 let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
                 Ok(match self.call(name, &args) {
-                    Ok(text) => json!({"content": [{"type": "text", "text": text}], "isError": false}),
-                    Err(e) => json!({"content": [{"type": "text", "text": format!("{:#}", e)}], "isError": true}),
+                    Ok(text) => {
+                        json!({"content": [{"type": "text", "text": text}], "isError": false})
+                    }
+                    Err(e) => {
+                        json!({"content": [{"type": "text", "text": format!("{:#}", e)}], "isError": true})
+                    }
                 })
             }
             _ if id.is_none() => return None, // notifications need no reply
@@ -375,13 +432,18 @@ impl Server {
         let id = id?;
         Some(match result {
             Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
-            Err((code, message)) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}),
+            Err((code, message)) => {
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+            }
         })
     }
 }
 
 pub fn serve(root: &Path, dir: &Path) -> Result<()> {
-    let server = Server { root: root.to_path_buf(), dir: dir.to_path_buf() };
+    let server = Server {
+        root: root.to_path_buf(),
+        dir: dir.to_path_buf(),
+    };
     server.ensure_daemon();
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
@@ -396,7 +458,9 @@ pub fn serve(root: &Path, dir: &Path) -> Result<()> {
                 (!r.is_empty()).then(|| Value::Array(r))
             }
             Ok(msg) => server.handle(&msg),
-            Err(e) => Some(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {}", e)}})),
+            Err(e) => Some(
+                json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": format!("parse error: {}", e)}}),
+            ),
         };
         if let Some(r) = reply {
             writeln!(stdout, "{}", r)?;

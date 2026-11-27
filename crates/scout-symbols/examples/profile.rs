@@ -11,7 +11,9 @@ fn main() {
     for line in std::io::stdin().lock().lines() {
         let p = line.unwrap();
         let data = std::fs::read(&p).unwrap();
-        let Some(lang) = scout_symbols::Lang::detect(p.as_bytes(), &data) else { continue };
+        let Some(lang) = scout_symbols::Lang::detect(p.as_bytes(), &data) else {
+            continue;
+        };
         bytes += data.len();
         n += 1;
         let t1 = Instant::now();

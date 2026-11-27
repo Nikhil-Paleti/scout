@@ -27,7 +27,9 @@ impl Default for Extractor {
 
 impl Extractor {
     pub fn new() -> Self {
-        Extractor { seen: vec![0u64; NUM_TRIGRAMS / 64] }
+        Extractor {
+            seen: vec![0u64; NUM_TRIGRAMS / 64],
+        }
     }
 
     /// Appends the distinct trigrams of `data` to `out`, sorted ascending.

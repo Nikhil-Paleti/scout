@@ -23,6 +23,6 @@ pub use build::{build_full, BuildOptions, BuildStats};
 pub use index::{Index, LiveFile};
 pub use manifest::{index_dir_for, Manifest, SegmentInfo};
 pub use rules::{Rules, Verdict};
+pub use scout_symbols as symbols;
 pub use segment::{FileMeta, Segment};
 pub use symfile::{SymFile, SymRec};
-pub use scout_symbols as symbols;

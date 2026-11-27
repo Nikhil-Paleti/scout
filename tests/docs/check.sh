@@ -37,5 +37,28 @@ while IFS= read -r q; do
     fail=$((fail + 1))
   fi
 done < "$tmp/queries"
+
+# Queries typed straight on the command line, unquoted: a `-term` after the
+# query is an exclusion, not a flag. Each line is the args, then a path the
+# results must not contain.
+while IFS='|' read -r args absent; do
+  n=$((n + 1))
+  # shellcheck disable=SC2086
+  out=$("$bin" $args 2>&1)
+  e=$?
+  if [ $e -ne 0 ]; then
+    echo "FAIL (exit $e): scout $args: $out"
+    fail=$((fail + 1))
+  elif printf '%s\n' "$out" | grep -q "$absent"; then
+    echo "FAIL (has $absent): scout $args"
+    fail=$((fail + 1))
+  fi
+done <<'CLI'
+calls launch -file:test|trainer_test.py
+search Handle -file:_test|handler_test.go
+launch -lang:python|\.py:
+sym Trainer -file:test|trainer_test.py
+files handler -file:_test|handler_test.go
+CLI
 echo "$n queries, $fail failed"
 [ $fail -eq 0 ]

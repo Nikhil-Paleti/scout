@@ -9,10 +9,19 @@ pub fn background() {
         const IOPRIO_CLASS_IDLE: libc::c_long = 3;
         const IOPRIO_WHO_PROCESS: libc::c_long = 1;
         let prio = IOPRIO_CLASS_IDLE << 13;
-        libc::syscall(libc::SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0 as libc::c_long, prio);
+        libc::syscall(
+            libc::SYS_ioprio_set,
+            IOPRIO_WHO_PROCESS,
+            0 as libc::c_long,
+            prio,
+        );
     }
     #[cfg(target_os = "macos")]
     unsafe {
-        libc::setpriority(libc::PRIO_DARWIN_PROCESS, 0, libc::PRIO_DARWIN_BG as libc::c_int);
+        libc::setpriority(
+            libc::PRIO_DARWIN_PROCESS,
+            0,
+            libc::PRIO_DARWIN_BG as libc::c_int,
+        );
     }
 }
