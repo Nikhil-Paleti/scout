@@ -179,6 +179,12 @@ local function route_keys()
   end
 end
 
+--- Starts the indexer for the current file's repo, else cwd's.
+local function index_here()
+  local name = vim.api.nvim_buf_get_name(0)
+  daemon.start(util.git_root(name ~= "" and vim.fs.dirname(name) or nil))
+end
+
 local function autocmds()
   local g = vim.api.nvim_create_augroup("scout", { clear = true })
   local cfg = config.options
@@ -208,6 +214,15 @@ local function autocmds()
       end,
     })
   end
+  if cfg.index_on_start then
+    vim.api.nvim_create_autocmd("VimEnter", { group = g, callback = index_here })
+    vim.api.nvim_create_autocmd("DirChanged", {
+      group = g,
+      callback = function()
+        daemon.start(util.git_root())
+      end,
+    })
+  end
   -- Learn whether a project is indexed before the first keypress.
   vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
     group = g,
@@ -224,6 +239,10 @@ function M.setup(opts)
     route_keys()
   end
   daemon.indexed(util.root())
+  -- Loaded after startup (lazy.nvim's VeryLazy): VimEnter has passed.
+  if config.options.index_on_start and vim.v.vim_did_enter == 1 then
+    vim.schedule(index_here)
+  end
 end
 
 return M

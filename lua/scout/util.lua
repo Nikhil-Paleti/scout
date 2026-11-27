@@ -38,6 +38,24 @@ function M.root(buf)
   return M.uv.fs_realpath(root) or root
 end
 
+--- Git root for a directory (default: cwd), or nil when it isn't in a
+--- repo or is the home directory.
+function M.git_root(dir)
+  dir = dir or M.uv.cwd()
+  local found = vim.fs.find(".git", { path = dir, upward = true })[1]
+  if not found then
+    return nil
+  end
+  local root = vim.fs.dirname(found)
+  root = M.uv.fs_realpath(root) or root
+  local home = M.uv.os_homedir()
+  home = home and (M.uv.fs_realpath(home) or home)
+  if root == home or root == "/" then
+    return nil
+  end
+  return root
+end
+
 --- Runs a command without blocking. on_exit(code, stdout, stderr) runs on
 --- the main loop.
 function M.run(cmd, opts, on_exit)

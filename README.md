@@ -48,6 +48,12 @@ Tools: `search`, `find_files`, `find_symbol`, `find_callers`, `index_status`,
 }
 ```
 
+The plugin starts indexing as soon as Neovim opens a git repo, and again when
+you `:cd` into another one. `event = "VeryLazy"` is fine: it fires right after
+startup. Indexing runs detached at low priority, never blocks the editor, and
+skips `$HOME` and folders outside git. Set `opts = { index_on_start = false }`
+to wait for the first search instead.
+
 `:ScoutLive`, `:ScoutDir` (this file's directory), `:ScoutFiles`, `:Scout`,
 `:ScoutWord`, `:ScoutSym`, `:ScoutCallers`, `:ScoutIndex`, `:checkhealth scout`.
 In indexed repos, LazyVim's `<leader>/`, `<leader>sg`, `<leader>sw`,

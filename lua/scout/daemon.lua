@@ -106,6 +106,35 @@ function M.when_indexed(root, cb, tries)
   end)
 end
 
+local function serve_cmd(bin, root)
+  local cmd = { bin, "serve", "--root", root }
+  for _, e in ipairs(require("scout.config").options.exclude or {}) do
+    vim.list_extend(cmd, { "--exclude", e })
+  end
+  return cmd
+end
+
+-- Roots started this session, so a :cd back and forth asks only once.
+local started = {}
+
+--- Quietly starts the background updater for `root`: it builds the index
+--- if there is none and catches up from git if there is. `scout serve`
+--- detaches at once and does nothing if one already runs.
+function M.start(root)
+  local bin = util.bin()
+  if not (bin and root) or started[root] then
+    return
+  end
+  started[root] = true
+  util.run(serve_cmd(bin, root), {}, function(code)
+    if code ~= 0 then
+      started[root] = nil
+      return
+    end
+    M.refresh(root)
+  end)
+end
+
 --- Builds the index in the background (or rebuilds it). The daemon does
 --- the work at low priority, so the editor stays responsive.
 function M.index(root, rebuild)
@@ -138,11 +167,7 @@ function M.index(root, rebuild)
       return
     end
   end
-  local cmd = { bin, "serve", "--root", root }
-  for _, e in ipairs(require("scout.config").options.exclude or {}) do
-    vim.list_extend(cmd, { "--exclude", e })
-  end
-  util.run(cmd, {}, function(code, _, err)
+  util.run(serve_cmd(bin, root), {}, function(code, _, err)
     if code ~= 0 then
       vim.notify("scout: could not start indexing: " .. vim.trim(err), vim.log.levels.ERROR)
       return

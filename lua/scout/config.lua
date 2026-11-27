@@ -18,6 +18,11 @@ M.defaults = {
   -- Neovim regains focus.
   notify_on_save = true,
   reconcile_on_focus = true,
+  -- Start the background indexer when Neovim opens a git repo, and on :cd
+  -- into another one: it builds the index if there is none, else catches up
+  -- with what changed. Runs detached at low priority; skips $HOME and
+  -- folders outside git.
+  index_on_start = true,
 }
 
 M.options = vim.deepcopy(M.defaults)
