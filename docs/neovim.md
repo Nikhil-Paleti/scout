@@ -29,6 +29,7 @@ Needs [snacks.nvim](https://github.com/folke/snacks.nvim) for pickers; without i
 | `<leader>/`, `<leader>sg` | `:ScoutLive` |
 | `<leader>sw` | `:ScoutWord` |
 | `<leader><space>`, `<leader>ff` | `:ScoutFiles` |
+| `<leader>/` in the snacks explorer | `:ScoutLive` in the highlighted folder |
 
 Before you type, pickers list changed files, recent files, then the current directory.
 

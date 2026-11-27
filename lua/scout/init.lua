@@ -179,6 +179,70 @@ local function route_keys()
   end
 end
 
+--- `dir` relative to `root`: "" for the root itself, nil when outside it.
+local function rel_to(root, dir)
+  dir = util.uv.fs_realpath(dir) or dir
+  if dir == root then
+    return ""
+  end
+  if dir:sub(1, #root + 1) == root .. "/" then
+    return dir:sub(#root + 2)
+  end
+end
+
+--- The snacks explorer whose list window shows `buf`.
+local function explorer_for(buf)
+  for _, p in ipairs(require("snacks").picker.get({ source = "explorer" })) do
+    if p.list and p.list.win and p.list.win.buf == buf then
+      return p
+    end
+  end
+end
+
+--- In the snacks explorer, <leader>/ greps the highlighted folder (or the
+--- highlighted file's folder). In an indexed repo it runs scout's live search
+--- in that folder instead; elsewhere the explorer's own mapping runs.
+local function route_explorer_buf(buf)
+  if not vim.api.nvim_buf_is_valid(buf) or not explorer_for(buf) then
+    return
+  end
+  local lhs = "<leader>/"
+  local orig = vim.api.nvim_buf_call(buf, function()
+    return vim.fn.maparg(lhs, "n", false, true)
+  end)
+  if not (orig and orig.lhs and orig.buffer == 1) or orig.desc == "Search folder (scout when indexed)" then
+    return
+  end
+  vim.keymap.set("n", lhs, function()
+    local p = explorer_for(buf)
+    local item = p and p:current()
+    local dir = item and require("snacks.picker.util").dir(item)
+    local root = dir and util.git_root(dir)
+    local rel = root and rel_to(root, dir)
+    if rel and daemon.indexed(root) then
+      return M.live({ root = root, dir = rel ~= "" and rel or nil })
+    end
+    if orig.callback then
+      return orig.callback()
+    end
+    local keys = vim.api.nvim_replace_termcodes(orig.rhs or "", true, true, true)
+    vim.api.nvim_feedkeys(keys, orig.noremap == 1 and "n" or "m", false)
+  end, { buffer = buf, desc = "Search folder (scout when indexed)", silent = true, nowait = true })
+end
+
+local function route_explorer()
+  vim.api.nvim_create_autocmd("FileType", {
+    group = vim.api.nvim_create_augroup("scout_explorer", { clear = true }),
+    pattern = "snacks_picker_list",
+    callback = function(ev)
+      -- After snacks has set the list window's own keys.
+      vim.schedule(function()
+        route_explorer_buf(ev.buf)
+      end)
+    end,
+  })
+end
+
 --- Starts the indexer for the current file's repo, else cwd's.
 local function index_here()
   local name = vim.api.nvim_buf_get_name(0)
@@ -237,6 +301,7 @@ function M.setup(opts)
   autocmds()
   if config.options.route_lazyvim_keys then
     route_keys()
+    route_explorer()
   end
   daemon.indexed(util.root())
   -- Loaded after startup (lazy.nvim's VeryLazy): VimEnter has passed.
