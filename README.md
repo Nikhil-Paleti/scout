@@ -12,30 +12,20 @@ cargo install --path scout/crates/scout
 
 ## Use
 
-Queries use Google Code Search syntax: terms are regexes, case insensitive,
-and all of them must match in the file. File names match too, and come first.
-
 ```sh
-scout '(TODO OR FIXME)' file:^src/ lang:cpp # regex search (rg-style output)
-scout 'file:_test\.go$'                     # list files
-scout files wdgt draw                       # fuzzy file names
-scout sym ParseConfig                       # definitions (also function:, class:)
-scout calls ParseConfig                     # call sites (matched by name only)
-scout --json -C 2 retry_count               # JSON lines for tools
+scout '(TODO OR FIXME) lang:python'   # search, Google Code Search syntax
+scout files trnr                      # find files by name
+scout sym Trainer                     # definitions
 ```
 
-The first search in a repo starts building the index in the background and
-scans files meanwhile. `scout build` builds it in the foreground. `scout
---help` lists every operator, filter and flag.
+[Examples](docs/examples.md) · [Syntax](docs/syntax.md) · [CLI](docs/cli.md) ·
+[Neovim](docs/neovim.md) · [MCP](docs/mcp.md)
 
 ## Agents
 
 ```sh
 claude mcp add scout -- scout mcp
 ```
-
-Tools: `search`, `find_files`, `find_symbol`, `find_callers`, `index_status`,
-`reindex`.
 
 ## Neovim (lazy.nvim)
 
@@ -48,20 +38,8 @@ Tools: `search`, `find_files`, `find_symbol`, `find_callers`, `index_status`,
 }
 ```
 
-The plugin starts indexing as soon as Neovim opens a git repo, and again when
-you `:cd` into another one. `event = "VeryLazy"` is fine: it fires right after
-startup. Indexing runs detached at low priority, never blocks the editor, and
-skips `$HOME` and folders outside git. Set `opts = { index_on_start = false }`
-to wait for the first search instead.
-
-Before you type, the pickers list changed files, recent files, then the
-current file's directory. `syntax_hint = false` hides the query hint.
-
-`:ScoutLive`, `:ScoutDir` (this file's directory), `:ScoutFiles`, `:Scout`,
-`:ScoutWord`, `:ScoutSym`, `:ScoutCallers`, `:ScoutIndex`, `:checkhealth scout`.
-In indexed repos, LazyVim's `<leader>/`, `<leader>sg`, `<leader>sw`,
-`<leader><space>` and `<leader>ff` use scout, and so does `<leader>/` in the
-snacks explorer, which searches the highlighted folder.
+Indexing starts when Neovim opens a git repo. Commands, keys and options:
+[docs/neovim.md](docs/neovim.md).
 
 ## Speed
 
