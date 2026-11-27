@@ -5,7 +5,8 @@ M.defaults = {
   -- then `scout` on $PATH.
   bin = nil,
   -- Send LazyVim's grep keys (<leader>/, <leader>sg, <leader>sw) to scout
-  -- when the project has an index. Without an index they stay on rg.
+  -- when the project has an index. Without an index they stay on rg. Also
+  -- <leader>/ in the snacks explorer: it searches the highlighted folder.
   route_lazyvim_keys = true,
   -- Show `sym:  file:  lang:  "exact"  -term` in the empty search prompt.
   syntax_hint = true,

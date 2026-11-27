@@ -60,7 +60,8 @@ current file's directory. `syntax_hint = false` hides the query hint.
 `:ScoutLive`, `:ScoutDir` (this file's directory), `:ScoutFiles`, `:Scout`,
 `:ScoutWord`, `:ScoutSym`, `:ScoutCallers`, `:ScoutIndex`, `:checkhealth scout`.
 In indexed repos, LazyVim's `<leader>/`, `<leader>sg`, `<leader>sw`,
-`<leader><space>` and `<leader>ff` use scout.
+`<leader><space>` and `<leader>ff` use scout, and so does `<leader>/` in the
+snacks explorer, which searches the highlighted folder.
 
 ## Speed
 
