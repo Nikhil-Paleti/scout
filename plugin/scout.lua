@@ -17,6 +17,14 @@ cmd("Scout", function(a)
   require("scout.search").quickfix(a.args)
 end, { nargs = "+", desc = "Scout: search into the quickfix list" })
 
+cmd("ScoutFiles", function(a)
+  scout().files({ search = a.args ~= "" and a.args or nil })
+end, { nargs = "*", desc = "Scout: find files by name" })
+
+cmd("ScoutDir", function(a)
+  scout().live_dir({ search = a.args ~= "" and a.args or nil })
+end, { nargs = "*", desc = "Scout: live search in the current file's directory" })
+
 cmd("ScoutWord", function()
   scout().word()
 end, { range = true, desc = "Scout: word under the cursor" })

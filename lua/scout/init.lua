@@ -43,7 +43,76 @@ function M.word()
   if w == "" then
     return
   end
-  M.pick(w, { fixed = true, word = whole, title = "Scout " .. w })
+  M.pick(w, { fixed = true, word = whole, contents_only = true, title = "Scout " .. w })
+end
+
+--- Directory of the current buffer, relative to the root (Google Code
+--- Search's `.`: search in the current directory).
+local function buf_dir(root)
+  local name = vim.api.nvim_buf_get_name(0)
+  if name == "" or name:sub(1, #root + 1) ~= root .. "/" then
+    return nil
+  end
+  local rel = vim.fn.fnamemodify(name:sub(#root + 2), ":h")
+  return rel ~= "." and rel or nil
+end
+
+--- Live search limited to the current file's directory.
+function M.live_dir(opts)
+  opts = opts or {}
+  local root = util.root()
+  local dir = opts.dir or buf_dir(root)
+  local p = snacks()
+  if p then
+    return p.live({ dir = dir, search = opts.search })
+  end
+  vim.ui.input({ prompt = "Scout in " .. (dir or ".") .. "/: " }, function(q)
+    if q and q ~= "" then
+      search.quickfix(search.dir_filter(dir) .. q, {})
+    end
+  end)
+end
+
+--- Find files by name: a snacks picker over every indexed path, or a
+--- prompt for `scout files QUERY` and a list to pick from.
+function M.files(opts)
+  opts = opts or {}
+  local p = snacks()
+  if p then
+    return p.files(opts)
+  end
+  local root = util.root()
+  local function run(q)
+    local cmd = search.files_cmd(q, { root = root })
+    if not cmd then
+      vim.notify("scout: binary not found", vim.log.levels.ERROR)
+      return
+    end
+    util.run(cmd, {}, function(code, out, err)
+      if code == 2 then
+        vim.notify("scout: " .. vim.trim(err), vim.log.levels.ERROR)
+        return
+      end
+      local paths = vim.split(out, "\n", { trimempty = true })
+      if #paths == 0 then
+        vim.notify("scout: no files match " .. q)
+        return
+      end
+      vim.ui.select(paths, { prompt = "Scout files" }, function(choice)
+        if choice then
+          vim.cmd.edit(vim.fn.fnameescape(root .. "/" .. choice))
+        end
+      end)
+    end)
+  end
+  if opts.search and opts.search ~= "" then
+    return run(opts.search)
+  end
+  vim.ui.input({ prompt = "Scout files: " }, function(q)
+    if q and q ~= "" then
+      run(q)
+    end
+  end)
 end
 
 local function name_arg(arg)
@@ -87,6 +156,9 @@ local function route_keys()
     { "<leader>sg", "n", function() M.live() end },
     { "<leader>sw", "n", M.word },
     { "<leader>sw", "x", M.word },
+    -- LazyVim's find files (root dir).
+    { "<leader><space>", "n", function() M.files() end },
+    { "<leader>ff", "n", function() M.files() end },
   }
   for _, r in ipairs(routes) do
     local lhs, mode, fn = r[1], r[2], r[3]
@@ -102,7 +174,7 @@ local function route_keys()
         end
         local keys = vim.api.nvim_replace_termcodes(orig.rhs or "", true, true, true)
         vim.api.nvim_feedkeys(keys, orig.noremap == 1 and "n" or "m", false)
-      end, { desc = (orig.desc or "Grep") .. " (scout when indexed)", silent = true })
+      end, { desc = (orig.desc or "Search") .. " (scout when indexed)", silent = true })
     end
   end
 end

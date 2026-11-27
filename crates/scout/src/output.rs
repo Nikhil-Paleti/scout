@@ -99,6 +99,45 @@ impl<W: Write> Printer<W> {
                 }
                 Ok(())
             }
+            Format::Json if h.is_file() => {
+                let v = json!({
+                    "type": "hit",
+                    "kind": "file",
+                    "path": h.path,
+                    "line": 1,
+                    "col": 1,
+                    "text": "",
+                    "ranges": h.ranges,
+                });
+                writeln!(self.out, "{}", v)
+            }
+            Format::Text if h.is_file() => {
+                self.flush_after(None)?;
+                if self.printed_any && self.before + self.after > 0 {
+                    writeln!(self.out, "--")?;
+                }
+                self.last_file.clear();
+                self.printed_any = true;
+                if self.color {
+                    let p = h.path.as_bytes();
+                    let mut at = 0;
+                    self.out.write_all(PATH.as_bytes())?;
+                    for &(s, e) in &h.ranges {
+                        if s < at || e > p.len() {
+                            continue;
+                        }
+                        self.out.write_all(&p[at..s])?;
+                        write!(self.out, "{MATCH}")?;
+                        self.out.write_all(&p[s..e])?;
+                        write!(self.out, "{RESET}{PATH}")?;
+                        at = e;
+                    }
+                    self.out.write_all(&p[at..])?;
+                    writeln!(self.out, "{RESET}  {DIM}[file]{RESET}")
+                } else {
+                    writeln!(self.out, "{}  [file]", h.path)
+                }
+            }
             Format::Json => {
                 let mut v = json!({
                     "type": "hit",
@@ -220,6 +259,7 @@ impl<W: Write> Printer<W> {
                 "type": "summary",
                 "matches": stats.matches,
                 "files": stats.files_matched,
+                "file_hits": stats.file_hits,
                 "truncated": stats.truncated,
                 "elapsed_ms": stats.total_time.as_secs_f64() * 1000.0,
             });

@@ -17,7 +17,16 @@ local function finder(root, get_query, flags)
       return function() end
     end
     flags = flags or {}
-    local cmd = search.cmd(query, { root = root, fixed = flags.fixed, word = flags.word, near = opts.near })
+    if flags.dir then
+      query = search.dir_filter(flags.dir) .. query
+    end
+    local cmd = search.cmd(query, {
+      root = root,
+      fixed = flags.fixed,
+      word = flags.word,
+      contents_only = flags.contents_only,
+      near = opts.near,
+    })
     if not cmd then
       return function() end
     end
@@ -33,6 +42,12 @@ local function finder(root, get_query, flags)
         end
         item.cwd = root
         item.file = h.path
+        if h.kind == "file" then
+          -- A file-name hit: open the file, no line.
+          item.text = h.path
+          item.line = "[file]"
+          return
+        end
         item.pos = { h.line, h.col - 1 }
         local note = search.note(h)
         item.line = note and (h.text .. "  " .. note) or h.text
@@ -64,13 +79,14 @@ local function near(root)
   end
 end
 
---- Live search: results update as you type. opts.search pre-fills it.
+--- Live search: results update as you type. opts.search pre-fills it;
+--- opts.dir limits it to a directory (relative to the root).
 function M.live(opts)
   opts = opts or {}
   local root = opts.root or util.root()
   return require("snacks").picker.pick({
     source = "scout",
-    title = "Scout",
+    title = opts.dir and ("Scout in " .. opts.dir .. "/") or "Scout",
     live = true,
     supports_live = true,
     search = opts.search,
@@ -79,7 +95,38 @@ function M.live(opts)
     show_empty = true,
     finder = finder(root, function(ctx)
       return ctx.filter.search
-    end),
+    end, { dir = opts.dir }),
+  })
+end
+
+--- File names: every indexed path from `scout files`, fuzzy matched by
+--- snacks as you type.
+function M.files(opts)
+  opts = opts or {}
+  local root = opts.root or util.root()
+  local cmd = search.files_cmd(nil, { root = root })
+  if not cmd then
+    return
+  end
+  return require("snacks").picker.pick({
+    source = "scout_files",
+    title = "Scout files",
+    format = "file",
+    pattern = opts.search,
+    finder = function(popts, ctx)
+      local proc = {
+        cmd = cmd[1],
+        args = vim.list_slice(cmd, 2),
+        cwd = root,
+        notify = false,
+        transform = function(item)
+          item.cwd = root
+          item.file = item.text
+        end,
+      }
+      local cfg_proc = ctx.opts and ctx:opts(proc) or { popts, proc }
+      return require("snacks.picker.source.proc").proc(cfg_proc, ctx)
+    end,
   })
 end
 

@@ -21,8 +21,12 @@ const MAX_LIMIT: usize = 500;
 const MAX_CONTEXT: usize = 10;
 const LINE_CAP: usize = 240;
 
-const QUERY_HELP: &str = "A regex (smart case) with optional filters: file:RE, -file:RE, lang:NAME (c, cpp, go, rust, python, \
-js, ts, lua, bazel, ...), case:yes. Examples: `kmalloc\\(.*GFP_ATOMIC lang:c`, `TODO file:^src/ -file:_test`.";
+const QUERY_HELP: &str = "Google Code Search syntax. Terms are regexes, case insensitive, ANDed per file \
+(`foo bar` = files with both); `OR`, `( )`, `-term` to exclude, `\"literal text\"`, `\\` escapes. A plain term also \
+matches file paths, and matching files are listed first. Filters: file:RE (path), lang:NAME (c, cpp, go, rust, python, \
+js, ts, java, bazel, ...), content:RE (contents only), comment:RE, usage:RE (outside comments and strings), case:yes, \
+pcre:yes (match across lines), sym:/function:/class:NAME (definitions), calls:NAME, refs:NAME. \
+Examples: `kmalloc\\(.*GFP_ATOMIC lang:c`, `TODO file:^src/ -file:_test`, `file:_test\\.go$` (list files).";
 
 fn tools() -> Value {
     let filters = json!({
@@ -35,7 +39,7 @@ fn tools() -> Value {
         {
             "name": "search",
             "title": "Search code",
-            "description": format!("Indexed regex search over the whole repository (tracked, untracked and hidden files; .gitignored files skipped). Much faster than grep on large repos. {} Results are path, line and the matching line, grouped by file and best first. If the repository isn't indexed yet, this still answers by scanning files and starts indexing in the background.", QUERY_HELP),
+            "description": format!("Indexed regex search over the whole repository (tracked, untracked and hidden files; .gitignored files skipped). Much faster than grep on large repos. {} Results: files whose name matches first (marked `(file name)`), then path, line and the matching line, grouped by file and best first. If the repository isn't indexed yet, this still answers by scanning files and starts indexing in the background.", QUERY_HELP),
             "inputSchema": {
                 "type": "object",
                 "properties": {"query": {"type": "string", "description": QUERY_HELP}, "limit": limit, "context": context},
@@ -73,6 +77,20 @@ fn tools() -> Value {
                     "context": context
                 },
                 "required": ["name"]
+            },
+            "annotations": {"readOnlyHint": true}
+        },
+        {
+            "name": "find_files",
+            "title": "Find files",
+            "description": "Finds files by name: fuzzy words (`widget draw` matches src/widget/draw_test.cc), or a regex over the path when the query has regex syntax (`_test\\.go$`). Best matches first: base-name hits, word starts, consecutive letters.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Fuzzy words or a path regex."},
+                    "limit": {"type": "integer", "description": "Maximum results (default 50, at most 500).", "minimum": 1}
+                },
+                "required": ["query"]
             },
             "annotations": {"readOnlyHint": true}
         },
@@ -128,7 +146,8 @@ impl Server {
     }
 
     fn run_query(&self, query: &str, limit: usize, context: usize) -> Result<String> {
-        let opts = SearchOptions { max_matches: limit, ..Default::default() };
+        // File-name hits first, but leave most of the limit for lines.
+        let opts = SearchOptions { max_matches: limit, max_file_hits: (limit / 5).clamp(3, 50), ..Default::default() };
         let mut hits: Vec<Hit> = Vec::new();
         let mut emit = |h: &Hit| {
             hits.push(h.clone());
@@ -171,11 +190,16 @@ impl Server {
         let mut out = String::new();
         for path in order {
             let mut hs = by_file.remove(path).unwrap_or_default();
+            let name_hit = hs.iter().any(|h| h.is_file());
+            hs.retain(|h| !h.is_file());
             // Text hits read best in file order; symbol hits keep rank order.
             if hs.iter().all(|h| h.kind.is_none()) {
                 hs.sort_by_key(|h| h.line);
             }
             out.push_str(path);
+            if name_hit {
+                out.push_str("  (file name)");
+            }
             out.push('\n');
             let lines: Vec<Vec<u8>> = if context > 0 {
                 fs::read(self.root.join(path))
@@ -233,6 +257,26 @@ impl Server {
         out
     }
 
+    fn find_files(&self, query: &str, limit: usize) -> Result<String> {
+        let building = !Manifest::exists(&self.dir);
+        let paths: Vec<String> = if building {
+            crate::start_background_build(&self.root, &self.dir);
+            scout_query::walk(&self.root, SearchOptions::default().threads)?
+        } else {
+            self.ensure_daemon();
+            let index = Index::open(&self.dir)?;
+            index.live_files().map(|f| String::from_utf8_lossy(f.path).into_owned()).collect()
+        };
+        let found = scout_query::files::find(&paths, query, None, limit + 1)?;
+        if found.is_empty() {
+            return Ok("No files.".into());
+        }
+        let more = found.len() > limit;
+        let mut out: String = found.iter().take(limit).map(|m| format!("{}\n", m.path)).collect();
+        out.push_str(&format!("\n{} file{}{}.", found.len().min(limit), if found.len() == 1 { "" } else { "s" }, if more { "; more exist, raise limit or add words" } else { "" }));
+        Ok(out)
+    }
+
     fn reindex(&self, full: bool) -> Result<String> {
         if !Manifest::exists(&self.dir) {
             crate::start_background_build(&self.root, &self.dir);
@@ -281,6 +325,10 @@ impl Server {
                 }
                 self.run_query(q.trim(), limit, context)
             }
+            "find_files" => {
+                let Some(q) = arg_str(args, "query") else { bail!("query is required") };
+                self.find_files(q, limit)
+            }
             "index_status" => {
                 let mut v = status_json(&self.root, &self.dir);
                 if let Some(o) = v.as_object_mut() {
@@ -306,7 +354,7 @@ impl Server {
                     "capabilities": {"tools": {"listChanged": false}},
                     "serverInfo": {"name": "scout", "title": "scout code search", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": format!(
-                        "scout searches the repository at {} through a local index. Prefer it over grep/rg for searching code: search for text and regexes, find_symbol for definitions, find_callers for call sites.",
+                        "scout searches the repository at {} through a local index. Prefer it over grep/rg for searching code: search for text and regexes (Google Code Search syntax), find_files for file names, find_symbol for definitions, find_callers for call sites.",
                         self.root.display()
                     ),
                 }))

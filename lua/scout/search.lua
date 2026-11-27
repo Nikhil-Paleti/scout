@@ -20,6 +20,9 @@ function M.cmd(query, opts)
   if opts.fixed then
     vim.list_extend(cmd, { "-F", "--no-filters" })
   end
+  if opts.contents_only then
+    table.insert(cmd, "--no-file-hits")
+  end
   if opts.word then
     table.insert(cmd, "-w")
   end
@@ -40,7 +43,34 @@ function M.decode(line)
   return v
 end
 
---- A short label for symbol hits: "[function]", "[call in main]".
+--- `scout files` command: every indexed path, or fuzzy/regex matches.
+function M.files_cmd(query, opts)
+  opts = opts or {}
+  local bin = util.bin()
+  if not bin then
+    return nil
+  end
+  local cmd = { bin, "files", "--root", opts.root or util.root() }
+  if opts.near and opts.near ~= "" then
+    vim.list_extend(cmd, { "--near", opts.near })
+  end
+  if query and query ~= "" then
+    vim.list_extend(cmd, { "--", query })
+  end
+  return cmd
+end
+
+--- A query term that limits results to files under `dir` (relative to the
+--- root), for "search in this directory".
+function M.dir_filter(dir)
+  if not dir or dir == "" or dir == "." then
+    return ""
+  end
+  local esc = dir:gsub("[%^%$%*%+%?%(%)%[%]%{%}|\\%. ]", "\\%0")
+  return "file:^" .. esc .. "/ "
+end
+
+--- A short label: "[file]" for a file-name hit, "[function]", "[call in main]".
 function M.note(h)
   if not h.kind or h.kind == "text" then
     return nil
@@ -71,11 +101,14 @@ function M.quickfix(query, opts)
       local h, other = M.decode(line)
       if h then
         local note = M.note(h)
+        if h.kind == "file" then
+          h.text = ""
+        end
         items[#items + 1] = {
           filename = root .. "/" .. h.path,
           lnum = h.line,
           col = h.col,
-          text = note and (h.text .. "  " .. note) or h.text,
+          text = note and (h.text ~= "" and (h.text .. "  " .. note) or note) or h.text,
         }
       elseif other then
         summary = other

@@ -59,7 +59,7 @@ pub fn intersect(a: &[u32], b: &[u32]) -> Vec<u32> {
     out
 }
 
-fn union_into(acc: Vec<u32>, b: &[u32]) -> Vec<u32> {
+pub fn union_into(acc: Vec<u32>, b: &[u32]) -> Vec<u32> {
     let mut out = Vec::with_capacity(acc.len() + b.len());
     let (mut i, mut j) = (0, 0);
     while i < acc.len() && j < b.len() {

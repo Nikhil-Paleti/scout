@@ -39,6 +39,30 @@ local qf = vim.fn.getqflist()
 check(#qf == 2, "two hits, got " .. #qf)
 check(qf[1] and qf[1].lnum >= 1 and qf[1].col >= 1, "positions set")
 
+-- File-name hits come first, marked [file]; a file:-only query lists files.
+vim.fn.setqflist({}, "r")
+vim.cmd([[Scout file:a\.c]])
+check(wait(5000, function() return #vim.fn.getqflist() > 0 end), ":Scout file: fills quickfix")
+local fq = vim.fn.getqflist()
+check(#fq == 1 and fq[1].lnum == 1 and fq[1].text == "[file]", "one file hit tagged [file]")
+vim.fn.setqflist({}, "r")
+vim.cmd("Scout hello_world OR nomatch_zz")
+check(wait(5000, function() return #vim.fn.getqflist() > 0 end), "OR query works")
+check(#vim.fn.getqflist() == 2, "OR query: two hits")
+
+-- :ScoutFiles without snacks: prompt result goes to vim.ui.select.
+local picked
+local orig_select = vim.ui.select
+vim.ui.select = function(items, _, cb)
+  picked = items
+  cb(nil)
+end
+vim.cmd("ScoutFiles sac")
+check(wait(5000, function() return picked ~= nil end), ":ScoutFiles lists matches")
+check(picked and #picked == 1 and picked[1] == "src/a.c", "fuzzy file match src/a.c")
+vim.ui.select = orig_select
+check(require("scout.search").dir_filter("src/x y.d") == [[file:^src/x\ y\.d/ ]], "dir filter escapes")
+
 -- :ScoutSym on the cursor word.
 vim.cmd("cclose")
 vim.cmd("edit src/a.c")

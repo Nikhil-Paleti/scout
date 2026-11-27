@@ -30,7 +30,7 @@ USAGE:
   scout calls NAME [FILTERS]          call sites, same as `scout 'calls:NAME'`
   scout refs NAME [FILTERS]           whole-word uses, same as `scout 'refs:NAME'`
   scout build   [--root DIR] [--exclude GLOB]... [--threads N] [--mem-mb N] [--no-nice] [--no-symbols] [--quiet]
-  scout files   [--root DIR]
+  scout files   [--root DIR] [--json] [--max N] [--near PATH] [QUERY]   file names: fuzzy words, or a regex
   scout serve   [--root DIR] [--foreground] [--exclude GLOB]... [--idle-secs N]
   scout notify  [--root DIR] [--start] PATH...
   scout reconcile [--root DIR] [--full]
@@ -41,23 +41,37 @@ USAGE:
 
 SEARCH OPTIONS:
   --json            one JSON object per hit, then a summary object (for tools and agents)
-  --vimgrep         path:line:col:text, no color or annotations
+  --vimgrep         path:line:col:text, no color or annotations, contents only (like rg)
   -l, --files       matching file names only
   -C/-A/-B N        context lines around (after, before) each hit
   -m, --max N       stop after N hits (default 5000)
-  -F, -w, -s, -i    fixed string, whole word, case sensitive, ignore case
+  -F, -w            fixed strings, whole words
+  -s, -i, -S        case sensitive, ignore case (default), smart case
+  --no-file-hits    terms match contents only; no file-name hits
+  --no-filters      the whole query is one regex, no syntax
   --near PATH       rank results near this file first
   --color WHEN      always, never or auto (default; honors NO_COLOR)
   --root DIR        repository root (default: git root of the current directory)
   --stats           print timing to stderr
   --no-auto-index   with no index, fail instead of scanning files and building one in the background
 
-QUERY is a regex (smart case) with optional filters:
-  file:RE  -file:RE  lang:NAME  -lang:NAME  case:yes|no|auto
-  sym:NAME     definitions (functions, methods, types, macros, Bazel targets)
-  calls:NAME   call sites of NAME, with the function each call is in
-  refs:NAME    whole-word, case-sensitive matches of NAME
-  kind:K       with sym:/calls:, e.g. kind:function, kind:class, kind:target
+QUERY follows Google Code Search. Terms are regexes, case insensitive, and
+every term must match somewhere in the file (implicit AND):
+  foo bar            files with both; lines with either are shown
+  foo OR bar         either; ( ) groups, OR binds looser than AND
+  -foo  -file:test   exclude files that match
+  \"a.b(c)\"         literal text; \\ escapes one character (main\\.java, a\\ b)
+A plain term also matches file paths: matching files are listed first.
+  content:RE         contents only, not file names
+  file:RE            path (aliases filepath: path: f:); file:-only queries list files
+  lang:NAME          language (language:), e.g. go, c++, python, js, rust, bazel
+  case:yes|no|auto   case for the group it is in (and nested groups)
+  comment:RE         inside comments          usage:RE   outside comments and strings
+  pcre:yes           regexes may match across lines, e.g. 'pcre:yes \\{\\s+generate_java'
+  sym:NAME           definitions (also symbol:); function:NAME, class:NAME by kind
+  calls:NAME         call sites of NAME, with the function each call is in
+  refs:NAME          whole-word, case-sensitive matches of NAME
+  kind:K             with sym:/calls:, e.g. kind:function, kind:class, kind:target
 Symbols are matched by name only (no type resolution): same-named functions mix.
 
 With no index yet, search starts building one in the background and scans the
@@ -225,6 +239,13 @@ pub fn start_background_build(root: &Path, dir: &Path) {
     }
 }
 
+/// `PATH` relative to the repository root, for `--near`.
+fn rel_to_root(root: &Path, n: &str) -> String {
+    let p = PathBuf::from(n);
+    let p = if p.is_absolute() { p } else { std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p) };
+    p.strip_prefix(root).map(|r| r.display().to_string()).unwrap_or_else(|_| n.to_string())
+}
+
 fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     let (root, dir) = root_and_dir(&mut a)?;
     let json_out = a.flag(&["--json"]);
@@ -234,7 +255,9 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     let word = a.flag(&["--word-regexp", "-w"]);
     let sensitive = a.flag(&["--case-sensitive", "-s"]);
     let insensitive = a.flag(&["--ignore-case", "-i"]);
+    let smart = a.flag(&["--smart-case", "-S"]);
     let no_filters = a.flag(&["--no-filters"]);
+    let no_file_hits = a.flag(&["--no-file-hits"]);
     let show_stats = a.flag(&["--stats"]);
     let max: Option<usize> = a.parsed(&["--max-count", "--max", "-m"])?;
     let threads: Option<usize> = a.parsed(&["--threads", "-j"])?;
@@ -253,12 +276,13 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
         fixed,
         word,
         filters: !no_filters,
+        paths: !no_file_hits && !vimgrep,
         case: if sensitive {
             Case::Sensitive
-        } else if insensitive {
-            Case::Insensitive
-        } else {
+        } else if smart && !insensitive {
             Case::Smart
+        } else {
+            Case::Insensitive
         },
         ..Default::default()
     };
@@ -268,11 +292,7 @@ fn cmd_search(mut a: Args, prefix: &str) -> Result<u8> {
     if let Some(t) = threads {
         opts.threads = t;
     }
-    opts.near = near.map(|n| {
-        let p = PathBuf::from(&n);
-        let p = if p.is_absolute() { p } else { std::env::current_dir().map(|c| c.join(&p)).unwrap_or(p) };
-        p.strip_prefix(&root).map(|r| r.display().to_string()).unwrap_or(n)
-    });
+    opts.near = near.map(|n| rel_to_root(&root, &n));
     let format = if json_out {
         Format::Json
     } else if files_out {
@@ -358,18 +378,32 @@ fn cmd_mcp(mut a: Args) -> Result<u8> {
 
 fn cmd_files(mut a: Args) -> Result<u8> {
     let (root, dir) = root_and_dir(&mut a)?;
-    a.positionals()?;
-    let index = open_index(&dir, &root)?;
-    let mut paths: Vec<&[u8]> = index.live_files().map(|f| f.path).collect();
-    paths.sort();
+    let json_out = a.flag(&["--json"]);
+    let max: Option<usize> = a.parsed(&["--max-count", "--max", "-m"])?;
+    let near = a.opt(&["--near"])?;
+    let query = a.positionals()?.join(" ");
+    let paths: Vec<String> = if Manifest::exists(&dir) {
+        let index = open_index(&dir, &root)?;
+        index.live_files().map(|f| String::from_utf8_lossy(f.path).into_owned()).collect()
+    } else {
+        start_background_build(&root, &dir);
+        scout_query::walk(&root, SearchOptions::default().threads)?
+    };
+    let limit = max.unwrap_or(if query.trim().is_empty() { usize::MAX } else { 200 });
+    let near = near.map(|n| rel_to_root(&root, &n));
+    let found = scout_query::files::find(&paths, &query, near.as_deref(), limit)?;
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
-    for p in paths {
-        out.write_all(p)?;
-        out.write_all(b"\n")?;
+    for m in &found {
+        if json_out {
+            writeln!(out, "{}", serde_json::json!({"type": "file", "path": m.path, "score": m.score, "positions": m.positions}))?;
+        } else {
+            out.write_all(m.path.as_bytes())?;
+            out.write_all(b"\n")?;
+        }
     }
     out.flush()?;
-    Ok(0)
+    Ok(if found.is_empty() { 1 } else { 0 })
 }
 
 fn serve_excludes(a: &mut Args) -> Result<Option<Vec<String>>> {

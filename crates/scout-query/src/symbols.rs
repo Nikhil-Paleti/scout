@@ -122,7 +122,7 @@ pub(crate) fn search(
                 .with_context(|| format!("invalid name regex `{}`", name))?,
         )
     };
-    let line_filter = !parsed.pattern.is_empty();
+    let line_filter = compiled.has_line_filter();
     stats.plan = format!("{} {}", if mode == SymMode::Defs { "sym" } else { "calls" }, name);
     stats.plan_time = t0.elapsed();
 
@@ -155,7 +155,7 @@ pub(crate) fn search(
                         continue;
                     }
                     let p = s.seg.path(r.file);
-                    if !compiled.path_ok(p) {
+                    if !compiled.sym_path_ok(p) {
                         continue;
                     }
                     let path = String::from_utf8_lossy(p).into_owned();
@@ -215,7 +215,7 @@ pub(crate) fn search(
         for f in &found[start..end] {
             let Some(Some(data)) = texts.get(f.path.as_str()) else { continue };
             let Some((line, text, col)) = locate(data, f.line, &f.name) else { continue };
-            if line_filter && !compiled.matcher.is_match(&text).unwrap_or(false) {
+            if line_filter && !compiled.sym_line_ok(&text) {
                 continue;
             }
             if stats.matches >= max {

@@ -243,11 +243,30 @@ fn symbols_and_output_formats() {
     assert_eq!(refs.len(), 3, "{refs:?}");
 
     // Context lines and `scout QUERY` shorthand.
-    let ctx = lines(&["def run", "-C", "1", "--color", "never"]);
+    let ctx = lines(&["\"def run\"", "-C", "1", "--color", "never"]);
     assert_eq!(ctx, vec!["app/main.py-6-", "app/main.py:7:1:def run():", "app/main.py-8-    pass"]);
     let ctx = lines(&["sym:run", "-A", "1", "--json"]);
     let v: serde_json::Value = serde_json::from_str(&ctx[0]).unwrap();
     assert_eq!(v["after"], serde_json::json!(["    pass"]));
+
+    // Google Code Search behavior: a plain term matches file names, listed
+    // first; file:-only queries list files; --vimgrep stays contents only.
+    let v: Vec<serde_json::Value> =
+        lines(&["widget", "--json"]).iter().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!((v[0]["kind"].as_str(), v[0]["path"].as_str()), (Some("file"), Some("src/widget.cc")));
+    assert!(v.iter().skip_while(|h| h["kind"] == "file").all(|h| h["kind"] != "file"));
+    assert_eq!(lines(&["file:widget", "--color", "never"]), vec!["src/widget.cc  [file]"]);
+    assert!(lines(&["widget", "--vimgrep"]).iter().all(|l| !l.ends_with("[file]") && l.contains(':')));
+    // AND per file, OR, exclusion.
+    let both = lines(&["Paint run", "--vimgrep"]);
+    assert!(both.iter().all(|l| l.starts_with("app/main.py")), "{both:?}");
+    assert!(lines(&["Paint -run", "--vimgrep"]).iter().all(|l| !l.starts_with("app/main.py")));
+    assert!(!lines(&["(nothing_here OR Paint) lang:py", "--vimgrep"]).is_empty());
+    // scout files: fuzzy and regex.
+    assert_eq!(lines(&["files", "wdgt"]), vec!["src/widget.cc"]);
+    assert_eq!(lines(&["files", r"\.py$"]), vec!["app/main.py"]);
+    let v: serde_json::Value = serde_json::from_str(&lines(&["files", "--json", "main"])[0]).unwrap();
+    assert_eq!(v["path"], "app/main.py");
 
     // Exit codes: 1 for no hits, 2 for a bad query.
     assert_eq!(e.scout().args(["calls", "Nope"]).status().unwrap().code(), Some(1));
@@ -350,7 +369,7 @@ fn mcp_round_trip() {
     assert_eq!(init["result"]["serverInfo"]["name"], "scout");
     let tools = call(serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["search", "find_symbol", "find_callers", "index_status", "reindex"]);
+    assert_eq!(names, ["search", "find_symbol", "find_callers", "find_files", "index_status", "reindex"]);
 
     // No index yet: search answers from a scan and says the index is building.
     let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
@@ -358,6 +377,16 @@ fn mcp_round_trip() {
     let text = r["result"]["content"][0]["text"].as_str().unwrap().to_string();
     assert!(text.contains("src/lib.rs") && text.contains("1: pub fn delta_fn() {}"), "{}", text);
     assert!(text.contains("index_status: building"), "{}", text);
+
+    // File names: a plain term lists matching files first; find_files is fuzzy.
+    let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "search", "arguments": {"query": "lib"}}}));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(text.starts_with("src/lib.rs  (file name)"), "{}", text);
+    let r = call(serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call",
+        "params": {"name": "find_files", "arguments": {"query": "slb"}}}));
+    let text = r["result"]["content"][0]["text"].as_str().unwrap().to_string();
+    assert!(text.starts_with("src/lib.rs\n"), "{}", text);
 
     // After the build, symbols work.
     let t = Instant::now();
