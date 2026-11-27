@@ -54,6 +54,9 @@ startup. Indexing runs detached at low priority, never blocks the editor, and
 skips `$HOME` and folders outside git. Set `opts = { index_on_start = false }`
 to wait for the first search instead.
 
+Before you type, the pickers list changed files, recent files, then the
+current file's directory. `syntax_hint = false` hides the query hint.
+
 `:ScoutLive`, `:ScoutDir` (this file's directory), `:ScoutFiles`, `:Scout`,
 `:ScoutWord`, `:ScoutSym`, `:ScoutCallers`, `:ScoutIndex`, `:checkhealth scout`.
 In indexed repos, LazyVim's `<leader>/`, `<leader>sg`, `<leader>sw`,

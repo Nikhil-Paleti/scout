@@ -7,6 +7,8 @@ M.defaults = {
   -- Send LazyVim's grep keys (<leader>/, <leader>sg, <leader>sw) to scout
   -- when the project has an index. Without an index they stay on rg.
   route_lazyvim_keys = true,
+  -- Show `sym:  file:  lang:  "exact"  -term` in the empty search prompt.
+  syntax_hint = true,
   -- Live search waits for this many characters.
   min_chars = 3,
   -- Most results a picker asks for.

@@ -1,6 +1,7 @@
 -- snacks.picker sources for scout: live search, a fixed query, symbols
 -- and callers.
 local search = require("scout.search")
+local start = require("scout.start")
 local util = require("scout.util")
 
 local M = {}
@@ -35,14 +36,70 @@ local function proc_opts(opts, ctx, proc)
   return { opts, proc }
 end
 
+--- The current file relative to `root`, if it is inside it.
+local function near(root)
+  local name = vim.api.nvim_buf_get_name(0)
+  if name ~= "" and name:sub(1, #root + 1) == root .. "/" then
+    return name:sub(#root + 2)
+  end
+end
+
+local function start_item(root, path, tag)
+  return { file = path, text = path, cwd = root, line = tag and ("[" .. tag .. "]") or nil }
+end
+
+--- Re-runs the picker's finder once git answers, if nothing was typed.
+local function refresher(picker)
+  return function()
+    if picker and not picker.closed and picker.input and picker.input:get() == "" then
+      picker:find()
+    end
+  end
+end
+
+--- Shows the syntax hint in the empty prompt.
+local hint_ns = vim.api.nvim_create_namespace("scout.hint")
+local function show_hint(picker)
+  if not require("scout.config").options.syntax_hint then
+    return
+  end
+  local buf = picker.input and picker.input.win and picker.input.win.buf
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
+    return
+  end
+  local function update()
+    if not vim.api.nvim_buf_is_valid(buf) then
+      return true
+    end
+    vim.api.nvim_buf_clear_namespace(buf, hint_ns, 0, -1)
+    if (vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or "") == "" then
+      vim.api.nvim_buf_set_extmark(buf, hint_ns, 0, 0, {
+        virt_text = { { start.hint, "Comment" } },
+        virt_text_pos = "eol",
+      })
+    end
+  end
+  update()
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, { buffer = buf, callback = update })
+end
+
 local function finder(root, get_query, flags)
   return function(opts, ctx)
     local cfg = require("scout.config").options
     local query = get_query(ctx)
+    flags = flags or {}
+    if flags.start and (not query or query == "") then
+      -- Nothing typed yet: changed, recent and nearby files.
+      local list = start.list(root, { dir = flags.dir, current = flags.current, on_update = refresher(ctx.picker) })
+      return function(cb)
+        for _, f in ipairs(list) do
+          cb(start_item(root, f[1], f[2]))
+        end
+      end
+    end
     if not query or query == "" or (opts.live and #query < cfg.min_chars) then
       return function() end
     end
-    flags = flags or {}
     if flags.dir then
       query = search.dir_filter(flags.dir) .. query
     end
@@ -95,13 +152,6 @@ local function finder(root, get_query, flags)
   end
 end
 
-local function near(root)
-  local name = vim.api.nvim_buf_get_name(0)
-  if name ~= "" and name:sub(1, #root + 1) == root .. "/" then
-    return name:sub(#root + 2)
-  end
-end
-
 --- Live search: results update as you type. opts.search pre-fills it;
 --- opts.dir limits it to a directory (relative to the root).
 function M.live(opts)
@@ -116,9 +166,10 @@ function M.live(opts)
     near = near(root),
     format = "file",
     show_empty = true,
+    on_show = show_hint,
     finder = finder(root, function(ctx)
       return ctx.filter.search
-    end, { dir = opts.dir }),
+    end, { dir = opts.dir, start = true, current = near(root) }),
   })
 end
 
@@ -131,23 +182,40 @@ function M.files(opts)
   if not cmd then
     return
   end
+  local current = near(root)
   return require("snacks").picker.pick({
     source = "scout_files",
     title = "Scout files",
     format = "file",
     pattern = opts.search,
     finder = function(popts, ctx)
+      local list = start.list(root, { current = current, on_update = refresher(ctx.picker) })
+      local seen = {}
+      for _, f in ipairs(list) do
+        seen[f[1]] = true
+      end
       local proc = {
         cmd = cmd[1],
         args = vim.list_slice(cmd, 2),
         cwd = root,
         notify = false,
         transform = function(item)
+          if seen[item.text] then
+            return false
+          end
           item.cwd = root
           item.file = item.text
         end,
       }
-      return require("snacks.picker.source.proc").proc(proc_opts(popts, ctx, proc), ctx)
+      local all = require("snacks.picker.source.proc").proc(proc_opts(popts, ctx, proc), ctx)
+      -- Changed, recent and nearby files first: with nothing typed snacks
+      -- keeps this order; typing sorts by match score.
+      return function(cb)
+        for _, f in ipairs(list) do
+          cb(start_item(root, f[1], f[2]))
+        end
+        all(cb)
+      end
     end,
   })
 end

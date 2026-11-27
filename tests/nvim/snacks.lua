@@ -106,6 +106,118 @@ p:action("confirm")
 vim.wait(1000, function() return vim.api.nvim_buf_get_name(0):find("a%.c$") ~= nil end, 20)
 check(vim.api.nvim_buf_get_name(0) == repo .. "/src/a.c" and vim.api.nvim_win_get_cursor(0)[1] == 1, "confirm jumps to src/a.c:1")
 
-vim.fn.system({ util.bin(), "stop" })
+-- Nothing typed: changed files (newest first), untracked, recent, then the
+-- current file's directory, with the file previewed and a syntax hint.
+local r2 = tmp .. "/repo2"
+local function put(rel, lines)
+  vim.fn.mkdir(vim.fn.fnamemodify(r2 .. "/" .. rel, ":h"), "p")
+  vim.fn.writefile(lines, r2 .. "/" .. rel)
+end
+for _, f in ipairs({ "lib/core.c", "lib/util.c", "lib/extra.c", "lib/zeta.c", "docs/guide.md", "main.c" }) do
+  put(f, { "// " .. f })
+end
+vim.fn.system({ "git", "init", "-q", r2 })
+vim.fn.system({ "git", "-C", r2, "add", "." })
+vim.fn.system({ "git", "-C", r2, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init" })
+put("lib/util.c", { "// util changed" })
+put("docs/guide.md", { "# Guide, changed" })
+put("lib/fresh.c", { "// untracked" })
+local now = os.time()
+uv.fs_utime(r2 .. "/docs/guide.md", now, now)
+uv.fs_utime(r2 .. "/lib/util.c", now - 60, now - 60)
+uv.fs_utime(r2 .. "/lib/fresh.c", now - 120, now - 120)
+r2 = uv.fs_realpath(r2)
+vim.cmd("cd " .. r2)
+vim.fn.system({ util.bin(), "build", "--quiet" })
+vim.cmd("%bwipeout!")
+vim.cmd("edit " .. r2 .. "/lib/extra.c")
+vim.cmd("edit " .. r2 .. "/lib/core.c")
+vim.v.oldfiles = { r2 .. "/main.c" }
+
+local function labels(items)
+  local out = {}
+  for _, it in ipairs(items) do
+    out[#out + 1] = it.file .. (it.line and (" " .. it.line) or "")
+  end
+  return out
+end
+local expect = {
+  "docs/guide.md [changed]",
+  "lib/util.c [changed]",
+  "lib/fresh.c [new]",
+  "lib/extra.c [recent]",
+  "main.c [recent]",
+  "lib/zeta.c",
+}
+local t0 = uv.hrtime()
+p = pickers.live()
+check((uv.hrtime() - t0) / 1e6 < 100, "empty live picker opens at once")
+local ok = vim.wait(5000, function()
+  return #p:items() > 0 and p:items()[1].file == "docs/guide.md"
+end, 20)
+items = p:items()
+check(ok and vim.deep_equal(labels(items), expect), "empty query lists changed, new, recent, nearby: " .. table.concat(labels(items), ", "))
+local pbuf = p.preview and p.preview.win and p.preview.win.buf
+check(vim.wait(2000, function()
+  return pbuf and vim.api.nvim_buf_is_valid(pbuf) and (vim.api.nvim_buf_get_lines(pbuf, 0, 1, false)[1] or "") == "# Guide, changed"
+end, 20), "preview shows the highlighted file")
+local ibuf = p.input.win.buf
+local function hint_shown()
+  vim.api.nvim_exec_autocmds("TextChanged", { buffer = ibuf })
+  local marks = vim.api.nvim_buf_get_extmarks(ibuf, vim.api.nvim_create_namespace("scout.hint"), 0, -1, { details = true })
+  return #marks == 1 and marks[1][4].virt_text[1][1]:find("sym:", 1, true) ~= nil
+end
+check(hint_shown(), "syntax hint shows in the empty prompt")
+p.input:set(nil, "util changed")
+p:find()
+check(vim.wait(5000, function()
+  local it = p:items()[1]
+  return it and it.pos ~= nil
+end, 20), "typing switches to search")
+items = p:items()
+check(#items == 1 and items[1].file == "lib/util.c" and items[1].pos[1] == 1, "search hit for the typed query")
+check(not hint_shown(), "hint hides while typing")
+p.input:set(nil, "")
+p:find()
+check(vim.wait(5000, function()
+  return vim.deep_equal(labels(p:items()), expect)
+end, 20), "clearing the query brings the list back")
+p:action("confirm")
+vim.wait(1000, function() return vim.api.nvim_buf_get_name(0):find("guide%.md$") ~= nil end, 20)
+check(vim.api.nvim_buf_get_name(0) == r2 .. "/docs/guide.md", "Enter opens the first file")
+
+-- :ScoutDir keeps to its directory.
+vim.cmd("edit " .. r2 .. "/lib/core.c")
+p = pickers.live({ dir = "lib" })
+vim.wait(5000, function() return #p:items() >= 4 end, 20)
+check(vim.deep_equal(labels(p:items()), { "lib/util.c [changed]", "lib/fresh.c [new]", "lib/extra.c [recent]", "lib/zeta.c" }), "dir scope: " .. table.concat(labels(p:items()), ", "))
+p:close()
+
+-- :ScoutFiles: the same list first, then every other path once.
+p = pickers.files()
+vim.wait(5000, function() return not p:is_active() and #p:items() >= 7 end, 20)
+items = p:items()
+local first = vim.list_slice(labels(items), 1, #expect)
+check(vim.deep_equal(first, expect), "files picker starts with the list: " .. table.concat(first, ", "))
+local seen_files, dupes = {}, 0
+for _, it in ipairs(items) do
+  dupes = dupes + (seen_files[it.file] and 1 or 0)
+  seen_files[it.file] = true
+end
+check(#items == 7 and dupes == 0, "files picker has every path once, got " .. #items)
+p:close()
+
+-- With the hint turned off, nothing is drawn.
+require("scout.config").options.syntax_hint = false
+p = pickers.live()
+vim.wait(3000, function()
+  local b = p.input.win.buf
+  return #p:items() > 0 and b and vim.api.nvim_buf_is_valid(b)
+end, 20)
+ibuf = p.input.win.buf
+check(ibuf and #vim.api.nvim_buf_get_extmarks(ibuf, vim.api.nvim_create_namespace("scout.hint"), 0, -1, {}) == 0, "syntax_hint = false hides the hint")
+p:close()
+vim.fn.system({ util.bin(), "stop", "--root", r2 })
+vim.fn.system({ util.bin(), "stop", "--root", repo })
 print(failures == 0 and "ALL PASSED" or (failures .. " FAILED"))
 vim.cmd((failures == 0 and "qa!" or "cq!"))
